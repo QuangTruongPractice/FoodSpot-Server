@@ -9,7 +9,6 @@ ROLE_CHOICES = [
     ('RESTAURANT_USER', 'Restaurant User'),
 ]
 
-
 FOLLOW_STATUS_CHOICES = [
     ('FOLLOW', 'Follow'),
     ('CANCEL', 'Cancel'),
@@ -33,17 +32,18 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractBaseUser, PermissionsMixin):
-    id = models.AutoField(primary_key=True)
     email = models.EmailField(unique=True)
-    fullname = models.CharField(max_length=255)
-    phone_number = models.CharField(max_length=20, blank=True)
-    username = models.CharField(max_length=50)
-    password = models.CharField(max_length=255)
+    fullname = models.CharField(max_length=255, blank=True)
+    phone_number = models.CharField(max_length=20, blank=True, null=True)
+    username = models.CharField(max_length=50, blank=True)
     is_active = models.BooleanField(default=True)
     created_date = models.DateField(auto_now_add=True)
     avatar = CloudinaryField(null=True)
     is_restaurant_user = models.BooleanField(default=False)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES)
+    is_staff = models.BooleanField(default=False)
+    is_superuser = models.BooleanField(default=False)
+    addresses = models.ManyToManyField('Address', related_name='users', blank=True)
 
     objects = UserManager()
 
@@ -55,30 +55,29 @@ class User(AbstractBaseUser, PermissionsMixin):
 
 
 class Address(models.Model):
-    id = models.AutoField(primary_key=True)
-    name = models.CharField(max_length=255)
+    name = models.CharField(max_length=255, blank=True)
     latitude = models.FloatField()
     longitude = models.FloatField()
 
     def __str__(self):
-        return f"{self.user.email} - ({self.latitude}, {self.longitude})"
+        return f"{self.name} ({self.latitude}, {self.longitude})"
 
 
 class Restaurant(models.Model):
-    id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=255)
-    phone_number = models.CharField(max_length=20, blank=True)
-    owner = models.ForeignKey(User, on_delete=models.CASCADE)
+    phone_number = models.CharField(max_length=20, blank=True, null=True)
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='restaurants')
     avatar = CloudinaryField(null=True)
     star_rating = models.FloatField(default=0.0)
-    address = models.CharField(max_length=255, blank=True)
+    address = models.ForeignKey('Address', on_delete=models.SET_NULL, null=True, blank=True, related_name='restaurants')
 
     def __str__(self):
         return self.name
 
+
 class Follow(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='followed_restaurants')
-    restaurant = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name='followers')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='follows_as_user')
+    restaurant = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name='follows_as_restaurant')
     status = models.CharField(max_length=20, choices=FOLLOW_STATUS_CHOICES, default='FOLLOW')
 
     class Meta:
