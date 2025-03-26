@@ -195,13 +195,21 @@ class Menu(models.Model):
 
 class Review(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='reviews')
-    order_detail = models.OneToOneField(OrderDetail, on_delete=models.CASCADE, related_name='review')
+    restaurant = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name='reviews')
     comment = models.TextField()
     created_date = models.DateTimeField(auto_now_add=True)
     star = models.FloatField()
 
+    class Meta:
+        unique_together = ('user', 'restaurant')
+
     def __str__(self):
-        return f"Review by {self.user.email} for {self.order_detail.food.name} in Order {self.order_detail.order.id}"
+        return f"Review by {self.user.email} for {self.restaurant.name} (Star: {self.star})"
+
+    def save(self, *args, **kwargs):
+        if not Order.objects.filter(user=self.user, restaurant=self.restaurant).exists():
+            raise ValueError("Only users who have placed at least one order at this restaurant can review it.")
+        super().save(*args, **kwargs)
 
 
 class Cart(models.Model):
