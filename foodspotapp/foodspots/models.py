@@ -193,22 +193,47 @@ class Menu(models.Model):
         return f"{self.name} at {self.restaurant.name}"
 
 
-class Review(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='reviews')
-    restaurant = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name='reviews')
+class RestaurantReview(models.Model):
+    user = models.ForeignKey('User', on_delete=models.CASCADE, related_name='restaurant_reviews')
+    restaurant = models.ForeignKey('Restaurant', on_delete=models.CASCADE, related_name='restaurant_reviews')
     comment = models.TextField()
     created_date = models.DateTimeField(auto_now_add=True)
-    star = models.FloatField()
+    star = models.DecimalField(max_digits=2, decimal_places=1)
 
     class Meta:
         unique_together = ('user', 'restaurant')
 
     def __str__(self):
-        return f"Review by {self.user.email} for {self.restaurant.name} (Star: {self.star})"
+        return f"Restaurant Review by {self.user.email} for {self.restaurant.name} (Star: {self.star})"
 
     def save(self, *args, **kwargs):
         if not Order.objects.filter(user=self.user, restaurant=self.restaurant).exists():
             raise ValueError("Only users who have placed at least one order at this restaurant can review it.")
+        if not (0.0 <= float(self.star) <= 5.0):
+            raise ValueError("Star rating must be between 0.0 and 5.0.")
+        super().save(*args, **kwargs)
+
+
+class FoodReview(models.Model):
+    user = models.ForeignKey('User', on_delete=models.CASCADE, related_name='food_reviews')
+    order_detail = models.ForeignKey('OrderDetail', on_delete=models.CASCADE, related_name='food_reviews')
+    comment = models.TextField()
+    created_date = models.DateTimeField(auto_now_add=True)
+    star = models.DecimalField(max_digits=2, decimal_places=1)
+
+    class Meta:
+        unique_together = ('user', 'order_detail')
+
+    def __str__(self):
+        return f"Food Review by {self.user.email} for {self.order_detail.food.name} in Order {self.order_detail.order.id} (Star: {self.star})"
+
+    def save(self, *args, **kwargs):
+        if self.user != self.order_detail.order.user:
+            raise ValueError("Only the user who placed the order can review the food.")
+        if not Order.objects.filter(user=self.user, restaurant=self.order_detail.order.restaurant).exists():
+            raise ValueError("Only users who have placed at least one order at this restaurant can review its food.")
+        if not (0.0 <= float(self.star) <= 5.0):
+            raise ValueError("Star rating must be between 0.0 and 5.0.")
         super().save(*args, **kwargs)
 
 

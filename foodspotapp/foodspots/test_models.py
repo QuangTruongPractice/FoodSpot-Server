@@ -6,7 +6,8 @@
 # 3. Trong shell, nhập: exec(open('foodspots/test_models.py', encoding='utf-8').read())
 
 # Nhập các model cần thiết
-from foodspots.models import User, Address, Tag, Restaurant, Follow, Order, OrderDetail, Payment, FoodCategory, Food, Menu, Review, Cart, SubCart, SubCartItem
+from foodspots.models import User, Address, Tag, Restaurant, Follow, Order, OrderDetail, Payment, FoodCategory, Food, Menu, RestaurantReview, FoodReview, Cart, SubCart, SubCartItem
+from decimal import Decimal
 
 # Bước 1: Tạo dữ liệu test
 print("=== Bắt đầu tạo dữ liệu test ===")
@@ -167,25 +168,67 @@ payment = Payment.objects.create(
 )
 print("Đã tạo Payment:", payment)
 
-# Tạo đánh giá từ customer (có đơn hàng)
-review = Review.objects.create(
+# Tạo đánh giá nhà hàng từ customer (có đơn hàng)
+restaurant_review = RestaurantReview.objects.create(
     user=customer,
     restaurant=restaurant,
-    star=4.8,
+    star=Decimal('4.8'),
     comment="Great food and service!"
 )
-print("Đã tạo Review:", review)
+print("Đã tạo Restaurant Review:", restaurant_review)
 
-# Thử tạo đánh giá từ customer2 (không có đơn hàng)
+# Tạo đánh giá món ăn từ customer (có đơn hàng)
+food_review = FoodReview.objects.create(
+    user=customer,
+    order_detail=order_detail,
+    star=Decimal('4.5'),
+    comment="The pizza was delicious!"
+)
+print("Đã tạo Food Review:", food_review)
+
+# Thử tạo đánh giá nhà hàng từ customer2 (không có đơn hàng)
 try:
-    invalid_review = Review.objects.create(
+    invalid_restaurant_review = RestaurantReview.objects.create(
         user=customer2,
         restaurant=restaurant,
-        star=3.5,
+        star=Decimal('3.5'),
         comment="Not bad"
     )
 except ValueError as e:
-    print("Lỗi khi tạo đánh giá từ", customer2.email, ":", e)
+    print("Lỗi khi tạo Restaurant Review từ", customer2.email, ":", e)
+
+# Thử tạo đánh giá món ăn từ customer2 (không phải người đặt đơn hàng)
+try:
+    invalid_food_review = FoodReview.objects.create(
+        user=customer2,
+        order_detail=order_detail,
+        star=Decimal('3.0'),
+        comment="Pizza was okay"
+    )
+except ValueError as e:
+    print("Lỗi khi tạo Food Review từ", customer2.email, ":", e)
+
+# Thử tạo đánh giá nhà hàng với star không hợp lệ (quá lớn)
+try:
+    invalid_star_restaurant_review = RestaurantReview.objects.create(
+        user=customer,
+        restaurant=restaurant,
+        star=Decimal('6.0'),  # Quá lớn
+        comment="Invalid star rating"
+    )
+except ValueError as e:
+    print("Lỗi khi tạo Restaurant Review với star không hợp lệ:", e)
+
+# Thử tạo đánh giá món ăn với star không hợp lệ (quá nhỏ)
+try:
+    invalid_star_food_review = FoodReview.objects.create(
+        user=customer,
+        order_detail=order_detail,
+        star=Decimal('-1.0'),  # Quá nhỏ
+        comment="Invalid star rating"
+    )
+except ValueError as e:
+    print("Lỗi khi tạo Food Review với star không hợp lệ:", e)
 
 # Thử tạo một Follow với người dùng không phải CUSTOMER
 try:
@@ -285,16 +328,22 @@ order_details = order.order_details.all()
 for detail in order_details:
     print(detail, detail.quantity, detail.sub_total)
 
+# Kiểm tra đánh giá món ăn trong order_detail
+print("\nDanh sách đánh giá món ăn trong", order_detail, ":")
+food_reviews = order_detail.food_reviews.all()
+for review in food_reviews:
+    print(review, review.comment)
+
 # Kiểm tra thanh toán của đơn hàng
 print("\nDanh sách thanh toán của", order, ":")
 payments = order.payments.all()
 for payment in payments:
     print(payment, payment.payment_method, payment.status)
 
-# Kiểm tra danh sách đánh giá của restaurant
-print("\nDanh sách đánh giá của", restaurant.name, ":")
-reviews = restaurant.reviews.all()
-for review in reviews:
+# Kiểm tra danh sách đánh giá nhà hàng của restaurant
+print("\nDanh sách đánh giá nhà hàng của", restaurant.name, ":")
+restaurant_reviews = restaurant.restaurant_reviews.all()
+for review in restaurant_reviews:
     print(review, review.comment)
 
 # Kiểm tra danh sách nhà hàng mà customer theo dõi
