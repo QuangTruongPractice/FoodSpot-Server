@@ -175,6 +175,17 @@ class Food(models.Model):
     star_rating = models.FloatField(default=0.0)
     food_category = models.ForeignKey(FoodCategory, on_delete=models.CASCADE, related_name='foods')
 
+    def update_star_rating(self):
+        # Chỉ lấy các đánh giá gốc (parent=None)
+        reviews = FoodReview.objects.filter(order_detail__food=self, parent=None)
+        if reviews.exists():
+            # Tính trung bình star của các đánh giá gốc
+            avg_rating = reviews.aggregate(models.Avg('star'))['star__avg']
+            self.star_rating = round(avg_rating, 1)
+        else:
+            self.star_rating = 0.0
+        self.save()
+
     def __str__(self):
         return self.name
 
@@ -220,20 +231,26 @@ class FoodReview(models.Model):
     comment = models.TextField()
     created_date = models.DateTimeField(auto_now_add=True)
     star = models.DecimalField(max_digits=2, decimal_places=1)
+    parent = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='replies')
 
     class Meta:
         unique_together = ('user', 'order_detail')
 
-    def __str__(self):
-        return f"Food Review by {self.user.email} for {self.order_detail.food.name} in Order {self.order_detail.order.id} (Star: {self.star})"
-
     def save(self, *args, **kwargs):
-        if self.user != self.order_detail.order.user:
-            raise ValueError("Only the user who placed the order can review the food.")
-        if not Order.objects.filter(user=self.user, restaurant=self.order_detail.order.restaurant).exists():
-            raise ValueError("Only users who have placed at least one order at this restaurant can review its food.")
-        if not (0.0 <= float(self.star) <= 5.0):
-            raise ValueError("Star rating must be between 0.0 and 5.0.")
+        if self.parent:
+            if self.user.role != 'RESTAURANT_USER':
+                raise ValueError("Only restaurant users can reply to food reviews.")
+            if self.parent.order_detail != self.order_detail:
+                raise ValueError("Replies must belong to the same order detail as the parent review.")
+            if self.star != 0:
+                raise ValueError("Replies should not have a star rating.")
+        else:
+            if self.user != self.order_detail.order.user:
+                raise ValueError("Only the user who placed the order can review the food.")
+            if not Order.objects.filter(user=self.user, restaurant=self.order_detail.order.restaurant).exists():
+                raise ValueError("Only users who have placed at least one order at this restaurant can review its food.")
+            if not (0.0 <= float(self.star) <= 5.0):
+                raise ValueError("Star rating must be between 0.0 and 5.0.")
         super().save(*args, **kwargs)
 
 

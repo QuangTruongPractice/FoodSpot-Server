@@ -1,5 +1,4 @@
-# File: test_models.py
-# Lưu file này trong thư mục E:\BTLON\FoodSpot-Server\foodspotapp\foodspots\test_models.py
+# File: foodspots/test_models.py
 # Hướng dẫn chạy:
 # 1. Mở terminal, di chuyển đến thư mục chứa manage.py: E:\BTLON\FoodSpot-Server\foodspotapp
 # 2. Chạy lệnh: python manage.py shell
@@ -8,6 +7,7 @@
 # Nhập các model cần thiết
 from foodspots.models import User, Address, Tag, Restaurant, Follow, Order, OrderDetail, Payment, FoodCategory, Food, Menu, RestaurantReview, FoodReview, Cart, SubCart, SubCartItem
 from decimal import Decimal
+from django.db import models
 
 # Bước 1: Tạo dữ liệu test
 print("=== Bắt đầu tạo dữ liệu test ===")
@@ -99,7 +99,7 @@ food = Food.objects.create(
     price=15.00,
     description='Delicious pizza with cheese',
     time_serve='EVENING',
-    star_rating=4.0,
+    star_rating=0.0,  # Ban đầu là 0, sẽ được cập nhật sau khi có đánh giá
     food_category=food_category
 )
 print("Đã tạo Food:", food)
@@ -178,13 +178,93 @@ restaurant_review = RestaurantReview.objects.create(
 print("Đã tạo Restaurant Review:", restaurant_review)
 
 # Tạo đánh giá món ăn từ customer (có đơn hàng)
-food_review = FoodReview.objects.create(
+food_review1 = FoodReview.objects.create(
     user=customer,
     order_detail=order_detail,
     star=Decimal('4.5'),
     comment="The pizza was delicious!"
 )
-print("Đã tạo Food Review:", food_review)
+print("Đã tạo Food Review 1:", food_review1)
+
+# Cập nhật star_rating của món ăn sau khi có đánh giá
+food.update_star_rating()
+print(f"Star rating của {food.name} sau 1 đánh giá: {food.star_rating} (Dự kiến: 4.5)")
+
+# Tạo một đánh giá món ăn khác từ customer (giả sử customer đặt thêm đơn hàng)
+order2 = Order.objects.create(
+    user=customer,
+    restaurant=restaurant,
+    address=address1,
+    total=15.00,
+    status='DELIVERED'
+)
+order_detail2 = OrderDetail.objects.create(
+    order=order2,
+    food=food,
+    quantity=1,
+    sub_total=15.00
+)
+food_review2 = FoodReview.objects.create(
+    user=customer,
+    order_detail=order_detail2,
+    star=Decimal('5.0'),
+    comment="Amazing pizza!"
+)
+print("Đã tạo Food Review 2:", food_review2)
+
+# Cập nhật star_rating của món ăn sau khi có thêm đánh giá
+food.update_star_rating()
+print(f"Star rating của {food.name} sau 2 đánh giá: {food.star_rating} (Dự kiến: (4.5 + 5.0) / 2 = 4.8)")
+
+# Tạo reply từ restaurant_user cho food_review1
+food_review_reply = FoodReview.objects.create(
+    user=restaurant_user,
+    order_detail=order_detail,
+    comment="Thank you for your review! We're glad you enjoyed the pizza.",
+    star=Decimal('0.0'),  # Reply không có star
+    parent=food_review1
+)
+print("Đã tạo Food Review Reply:", food_review_reply)
+
+# Cập nhật star_rating của món ăn sau khi có reply
+food.update_star_rating()
+print(f"Star rating của {food.name} sau khi có reply: {food.star_rating} (Dự kiến: vẫn là 4.8, vì reply không ảnh hưởng)")
+
+# Thử tạo reply từ customer (không được phép)
+try:
+    invalid_food_review_reply = FoodReview.objects.create(
+        user=customer2,
+        order_detail=order_detail,
+        comment="I also liked the pizza!",
+        star=Decimal('0.0'),
+        parent=food_review1
+    )
+except ValueError as e:
+    print("Lỗi khi tạo Food Review Reply từ customer:", e)
+
+# Thử tạo reply với star (không được phép)
+try:
+    invalid_food_review_reply_star = FoodReview.objects.create(
+        user=restaurant_user,
+        order_detail=order_detail,
+        comment="Thank you!",
+        star=Decimal('3.0'),  # Reply không được có star
+        parent=food_review1
+    )
+except ValueError as e:
+    print("Lỗi khi tạo Food Review Reply với star:", e)
+
+# Thử tạo reply cho order_detail khác (không được phép)
+try:
+    invalid_food_review_reply_order = FoodReview.objects.create(
+        user=restaurant_user,
+        order_detail=order_detail2,
+        comment="Thank you!",
+        star=Decimal('0.0'),
+        parent=food_review1
+    )
+except ValueError as e:
+    print("Lỗi khi tạo Food Review Reply cho order_detail khác:", e)
 
 # Thử tạo đánh giá nhà hàng từ customer2 (không có đơn hàng)
 try:
@@ -333,6 +413,10 @@ print("\nDanh sách đánh giá món ăn trong", order_detail, ":")
 food_reviews = order_detail.food_reviews.all()
 for review in food_reviews:
     print(review, review.comment)
+    # Kiểm tra các reply của đánh giá
+    replies = review.replies.all()
+    for reply in replies:
+        print(f"  Reply: {reply}, {reply.comment}")
 
 # Kiểm tra thanh toán của đơn hàng
 print("\nDanh sách thanh toán của", order, ":")
