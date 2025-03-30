@@ -37,8 +37,9 @@ print("Đã tạo địa chỉ cho nhà hàng:", restaurant_address)
 customer = User.objects.create_user(
     email='customer@example.com',
     password='password123',
-    fullname='Customer Name',
-    username='customer1',
+    first_name='Customer',
+    last_name='Name',
+    username='customer1',  # Thêm username duy nhất
     role='CUSTOMER'
 )
 customer.addresses.add(address1, address2)
@@ -48,8 +49,9 @@ print("Đã tạo CUSTOMER:", customer.email)
 customer2 = User.objects.create_user(
     email='customer2@example.com',
     password='password123',
-    fullname='Customer Two',
-    username='customer2',
+    first_name='Customer',
+    last_name='Two',
+    username='customer2',  # Thêm username duy nhất
     role='CUSTOMER'
 )
 customer2.addresses.add(address1)
@@ -59,8 +61,9 @@ print("Đã tạo CUSTOMER thứ hai:", customer2.email)
 restaurant_user = User.objects.create_user(
     email='restaurant@example.com',
     password='password123',
-    fullname='Restaurant Owner',
-    username='restaurant1',
+    first_name='Restaurant',
+    last_name='Owner',
+    username='restaurant1',  # Thêm username duy nhất
     role='RESTAURANT_USER',
     is_restaurant_user=True
 )

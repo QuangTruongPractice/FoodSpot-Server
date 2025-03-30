@@ -34,6 +34,16 @@ TIME_SERVE_CHOICES = [
 ]
 
 
+from django.db import models
+from django.contrib.auth.models import AbstractUser, BaseUserManager
+from cloudinary.models import CloudinaryField
+
+ROLE_CHOICES = [
+    ('ADMIN', 'Admin'),
+    ('CUSTOMER', 'Customer'),
+    ('RESTAURANT_USER', 'Restaurant User'),
+]
+
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:
@@ -47,27 +57,25 @@ class UserManager(BaseUserManager):
     def create_superuser(self, email, password=None, **extra_fields):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
+        if extra_fields.get('is_staff') is not True:
+            raise ValueError('Superuser must have is_staff=True.')
+        if extra_fields.get('is_superuser') is not True:
+            raise ValueError('Superuser must have is_superuser=True.')
         return self.create_user(email, password, **extra_fields)
 
-
-class User(AbstractBaseUser, PermissionsMixin):
-    email = models.EmailField(unique=True)
-    fullname = models.CharField(max_length=255, blank=True)
+class User(AbstractUser):
+    # Các trường mặc định từ AbstractUser: username, first_name, last_name, email, password, is_staff, is_active, date_joined, is_superuser
+    email = models.EmailField(unique=True)  # Ghi đè để đảm bảo email là duy nhất
     phone_number = models.CharField(max_length=20, blank=True, null=True)
-    username = models.CharField(max_length=50, blank=True)
-    is_active = models.BooleanField(default=True)
-    created_date = models.DateField(auto_now_add=True)
     avatar = CloudinaryField(null=True)
     is_restaurant_user = models.BooleanField(default=False)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES)
-    is_staff = models.BooleanField(default=False)
-    is_superuser = models.BooleanField(default=False)
     addresses = models.ManyToManyField('Address', related_name='users', blank=True)
 
     objects = UserManager()
 
-    USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = ['fullname', 'username']
+    USERNAME_FIELD = 'email'  # Sử dụng email thay vì username để đăng nhập
+    REQUIRED_FIELDS = ['first_name', 'last_name']  # Các trường bắt buộc khi tạo superuser
 
     def __str__(self):
         return self.email
