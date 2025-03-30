@@ -65,7 +65,6 @@ restaurant_user = User.objects.create_user(
     last_name='Owner',
     username='restaurant1',  # Thêm username duy nhất
     role='RESTAURANT_USER',
-    is_restaurant_user=True
 )
 print("Đã tạo RESTAURANT_USER:", restaurant_user.email)
 

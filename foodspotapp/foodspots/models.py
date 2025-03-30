@@ -68,7 +68,6 @@ class User(AbstractUser):
     email = models.EmailField(unique=True)  # Ghi đè để đảm bảo email là duy nhất
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     avatar = CloudinaryField(null=True)
-    is_restaurant_user = models.BooleanField(default=False)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES)
     addresses = models.ManyToManyField('Address', related_name='users', blank=True)
 
