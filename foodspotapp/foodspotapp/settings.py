@@ -81,13 +81,23 @@ WSGI_APPLICATION = 'foodspotapp.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
-
+#Nghia
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.mysql',
+#         'NAME': 'foodspotdb',
+#         'USER': 'root',
+#         'PASSWORD': 'nghia142004',
+#         'HOST': ''
+#     }
+# }
+#Truong
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'foodspotdb',
         'USER': 'root',
-        'PASSWORD': 'nghia142004',
+        'PASSWORD': 'Admin@123',
         'HOST': ''
     }
 }
@@ -156,9 +166,17 @@ import cloudinary.uploader
 from cloudinary.utils import cloudinary_url
 
 # Configuration
+#Nghia
+# cloudinary.config(
+#     cloud_name = "ddke8odpp",
+#     api_key = "967889279184172",
+#     api_secret = "CLOUDINARY_URL=cloudinary://967889279184172:kSu8NtNakUyi5fwtUdcumtLRdA4@ddke8odpp", # Click 'View API Keys' above to copy your API secret
+#     secure=True
+#
+#Truong
 cloudinary.config(
-    cloud_name = "ddke8odpp",
-    api_key = "967889279184172",
-    api_secret = "CLOUDINARY_URL=cloudinary://967889279184172:kSu8NtNakUyi5fwtUdcumtLRdA4@ddke8odpp", # Click 'View API Keys' above to copy your API secret
+    cloud_name='derx1izam',
+    api_key='826692895649512',
+    api_secret='aEf9hn_PrTeOXTOOJCz6k8Ucf3U',
     secure=True
 )
