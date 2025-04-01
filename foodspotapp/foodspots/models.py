@@ -133,6 +133,7 @@ class Order(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders')
     address = models.ForeignKey(Address, on_delete=models.CASCADE, related_name='orders')
     status = models.CharField(max_length=20, choices=ORDER_STATUS_CHOICES, default='PENDING')
+    ordered_date = models.DateField(auto_now_add=True, null=True)
 
     def __str__(self):
         return f"Order {self.id} by {self.user.email} at {self.restaurant.name}"

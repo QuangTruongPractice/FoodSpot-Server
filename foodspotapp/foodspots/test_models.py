@@ -5,7 +5,7 @@
 # 3. Trong shell, nhập: exec(open('foodspots/test_models.py', encoding='utf-8').read())
 
 # Nhập các model cần thiết
-from foodspots.models import User, Address, Tag, Restaurant, Follow, Order, OrderDetail, Payment, FoodCategory, Food, Menu, RestaurantReview, FoodReview, Cart, SubCart, SubCartItem
+from .models import User, Address, Tag, Restaurant, Follow, Order, OrderDetail, Payment, FoodCategory, Food, Menu, RestaurantReview, FoodReview, Cart, SubCart, SubCartItem
 from decimal import Decimal
 from django.db import models
 
