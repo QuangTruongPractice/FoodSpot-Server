@@ -1,5 +1,5 @@
 from django.db import models
-from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.contrib.auth.models import AbstractUser, BaseUserManager
 from cloudinary.models import CloudinaryField
 
 
@@ -34,9 +34,7 @@ TIME_SERVE_CHOICES = [
 ]
 
 
-from django.db import models
-from django.contrib.auth.models import AbstractUser, BaseUserManager
-from cloudinary.models import CloudinaryField
+
 
 ROLE_CHOICES = [
     ('ADMIN', 'Admin'),
@@ -127,7 +125,6 @@ class Follow(models.Model):
 
 
 class Order(models.Model):
-    delivery_status = models.IntegerField(default=0)
     total = models.FloatField(default=0.0)
     restaurant = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name='orders')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders')
@@ -154,7 +151,7 @@ class OrderDetail(models.Model):
 
 
 class Payment(models.Model):
-    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='payments')
+    order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name='payments')
     payment_method = models.CharField(max_length=50)
     status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='FAIL')
     amount = models.FloatField()

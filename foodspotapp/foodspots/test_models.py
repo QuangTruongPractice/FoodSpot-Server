@@ -42,6 +42,14 @@ customer = User.objects.create_user(
     username='customer1',  # Thêm username duy nhất
     role='CUSTOMER'
 )
+admin = User.objects.create_user(
+    email='customer@example.com',
+    password='password123',
+    first_name='Customer',
+    last_name='Name',
+    username='customer1',  # Thêm username duy nhất
+    role='CUSTOMER'
+)
 customer.addresses.add(address1, address2)
 print("Đã tạo CUSTOMER:", customer.email)
 

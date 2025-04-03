@@ -22,6 +22,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-qri44j=$2%je#5+k@_4z9y^&e9kgb^@5e(16u(bj@2nk_wecl@'
 
+# CLIENT_ID = 'BK7VyfaWpZbTv57Xeqhj4EiPIgtHLb3dfQmEb6rI'
+# CLIENT_SECRET = '3G4arnVcM0sIB4xqugfgka5pG0Q185Lkv9gDJbQhZ7fuye7eDhDKzOJeevcag6TPs96ilaXkf69itiIyaRQ9pKwGHFY70ZFtyDGzWlnSNgMGzgwIKxnekDV6ct6f0WTE'
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
@@ -45,8 +48,24 @@ INSTALLED_APPS = [
     'allauth.account',
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
+    'oauth2_provider'
 ]
+OAUTH2_PROVIDER = { 'OAUTH2_BACKEND_CLASS': 'oauth2_provider.oauth2_backends.JSONOAuthLibCore' }
 
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'oauth2_provider.contrib.rest_framework.OAuth2Authentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}
+
+OAUTH2_PROVIDER = {
+    'SCOPES': {'read': 'Read scope', 'write': 'Write scope'},
+    'ACCESS_TOKEN_EXPIRE_SECONDS': 360000,  # Token hết hạn sau 100 giờ
+}
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -159,6 +178,6 @@ from cloudinary.utils import cloudinary_url
 cloudinary.config(
     cloud_name = "ddke8odpp",
     api_key = "967889279184172",
-    api_secret = "CLOUDINARY_URL=cloudinary://967889279184172:kSu8NtNakUyi5fwtUdcumtLRdA4@ddke8odpp", # Click 'View API Keys' above to copy your API secret
+    api_secret = "kSu8NtNakUyi5fwtUdcumtLRdA4",
     secure=True
 )
