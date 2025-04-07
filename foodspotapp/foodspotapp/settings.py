@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
     'oauth2_provider',
+    'drf_yasg',
 ]
 
 MIDDLEWARE = [

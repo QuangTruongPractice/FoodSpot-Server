@@ -88,17 +88,6 @@ class OrderDetailViewSet(viewsets.ModelViewSet):
     )
     serializer_class = OrderDetailSerializer
 
-class OrderRestaurantViewSet(viewsets.ModelViewSet):
-    queryset = Order.objects.prefetch_related(
-        'order_details__food'  # Lấy tất cả các `food` liên kết với `order_details`
-    ).select_related(
-        'user',  # Lấy thông tin `user` trong một truy vấn JOIN
-        'restaurant'  # Lấy thông tin `restaurant` trong một truy vấn JOIN
-    )
-    serializer_class = OrderSerializer
-
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
 
 class FoodPriceViewSet(viewsets.ModelViewSet):
     queryset = FoodPrice.objects.select_related('food')

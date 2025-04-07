@@ -9,7 +9,6 @@ from .views import (
 router = DefaultRouter()
 router.register('orders', views.OrderViewSet, basename='orders')
 router.register('order-detail', views.OrderDetailViewSet, basename='order-detail')
-router.register('order_restaurant', views.OrderRestaurantViewSet, basename='order_restaurant')
 router.register('foods', views.FoodViewSet, basename='foods')
 router.register('foods-price', views.FoodPriceViewSet, basename='foods-price')
 router.register('foods-category', views.FoodCategoryViewSet, basename='foods-category')
