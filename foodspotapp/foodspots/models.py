@@ -1,5 +1,5 @@
 from django.db import models
-from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.contrib.auth.models import AbstractUser, BaseUserManager
 from cloudinary.models import CloudinaryField
 
 
@@ -34,9 +34,7 @@ TIME_SERVE_CHOICES = [
 ]
 
 
-from django.db import models
-from django.contrib.auth.models import AbstractUser, BaseUserManager
-from cloudinary.models import CloudinaryField
+
 
 ROLE_CHOICES = [
     ('ADMIN', 'Admin'),
@@ -147,7 +145,13 @@ class OrderDetail(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='order_details')
     food = models.ForeignKey('Food', on_delete=models.CASCADE, related_name='order_details')
     quantity = models.IntegerField()
-    sub_total = models.FloatField()
+    sub_total = models.FloatField()  # Giá thực tế tại thời điểm đặt hàng
+    time_serve = models.CharField(max_length=20, choices=TIME_SERVE_CHOICES)  # Thêm trường này
+
+    def save(self, *args, **kwargs):
+        food_price = FoodPrice.objects.get(food=self.food, time_serve=self.time_serve).price
+        self.sub_total = food_price * self.quantity
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"OrderDetail {self.id} for Order {self.order.id}"
@@ -174,19 +178,16 @@ class FoodCategory(models.Model):
 
 class Food(models.Model):
     name = models.CharField(max_length=255)
-    price = models.FloatField()
     image = CloudinaryField(null=True)
     description = models.TextField(blank=True, null=True)
     is_available = models.BooleanField(default=True)
-    time_serve = models.CharField(max_length=20, choices=TIME_SERVE_CHOICES)
     star_rating = models.FloatField(default=0.0)
     food_category = models.ForeignKey(FoodCategory, on_delete=models.CASCADE, related_name='foods')
+    restaurant = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name='foods')
 
     def update_star_rating(self):
-        # Chỉ lấy các đánh giá gốc (parent=None)
         reviews = FoodReview.objects.filter(order_detail__food=self, parent=None)
         if reviews.exists():
-            # Tính trung bình star của các đánh giá gốc
             avg_rating = reviews.aggregate(models.Avg('star'))['star__avg']
             self.star_rating = round(avg_rating, 1)
         else:
@@ -195,6 +196,18 @@ class Food(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class FoodPrice(models.Model):
+    food = models.ForeignKey(Food, on_delete=models.CASCADE, related_name='prices')
+    time_serve = models.CharField(max_length=20, choices=TIME_SERVE_CHOICES)
+    price = models.FloatField()
+
+    class Meta:
+        unique_together = ('food', 'time_serve')
+
+    def __str__(self):
+        return f"{self.food.name} - {self.time_serve}: {self.price}"
 
 
 class Menu(models.Model):
@@ -284,6 +297,12 @@ class SubCartItem(models.Model):
     sub_cart = models.ForeignKey(SubCart, on_delete=models.CASCADE, related_name='sub_cart_items')
     quantity = models.IntegerField()
     price = models.FloatField()
+    time_serve = models.CharField(max_length=20, choices=TIME_SERVE_CHOICES)
+
+    def save(self, *args, **kwargs):
+        food_price = FoodPrice.objects.get(food=self.food, time_serve=self.time_serve).price
+        self.price = food_price
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"SubCartItem {self.food.name} in SubCart {self.sub_cart.id}"
