@@ -1,3 +1,4 @@
+from allauth.headless.base.views import APIView
 from django.http import HttpResponse
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -202,55 +203,54 @@ class FoodCategoryViewSet(viewsets.ModelViewSet):
 
         return Response(serializer.data)
 
-class FoodReviewViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.ListAPIView,
-                        generics.RetrieveAPIView, generics.DestroyAPIView):
+
+class BaseReviewUpdateMixin(viewsets.ViewSet):
+    review_model = None
+    review_serializer = None
+
+    def get_permissions(self):
+        if hasattr(self, 'action'):  # Kiểm tra xem action có tồn tại không
+            if self.action == 'list':
+                return [permissions.AllowAny()]
+            elif self.action == 'create':
+                return [permissions.IsAuthenticated(), IsOrderOwner()]
+            elif self.action in ['update', 'partial_update', 'destroy']:
+                return [permissions.IsAuthenticated(), IsOwnerOrAdmin()]
+        return super().get_permissions()
+
+    def partial_update(self, request, pk=None):
+        try:
+            instance = self.review_model.objects.get(pk=pk)
+        except self.review_model.DoesNotExist:
+            return Response({"detail": "Không tìm thấy đánh giá."}, status=status.HTTP_404_NOT_FOUND)
+
+        allowed_fields = {'comment', 'star'}
+        invalid_fields = set(request.data.keys()) - allowed_fields
+        if invalid_fields:
+            return Response(
+                {"detail": f"Chỉ có thể chỉnh sửa các trường: {', '.join(allowed_fields)}."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = self.review_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+class FoodReviewViewSet(BaseReviewUpdateMixin, viewsets.ViewSet,
+                        generics.ListCreateAPIView, generics.RetrieveDestroyAPIView):
     queryset = FoodReview.objects.all()
     serializer_class = FoodReviewSerializers
+    review_model = FoodReview
+    review_serializer = FoodReviewSerializers
 
-    def get_permissions(self):
-        if self.action == 'list':
-            return [permissions.AllowAny()]
-        elif self.action == 'create':
-            return [permissions.IsAuthenticated(), IsOrderOwner()]
-        elif self.action in ['update', 'partial_update', 'destroy']:
-            return [permissions.IsAuthenticated(), IsOwnerOrAdmin()]
-        return super().get_permissions()
-
-    def partial_update(self, request, *args, **kwargs):
-        """Chỉ cho phép chỉnh sửa 'comment' hoặc 'star'."""
-        allowed_fields = {'comment', 'star'}
-        invalid_fields = set(request.data.keys()) - allowed_fields
-        if invalid_fields:
-            return Response(
-                {"detail": f"Chỉ có thể chỉnh sửa các trường: {', '.join(allowed_fields)}."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        return super().partial_update(request, *args, **kwargs)
-
-class RestaurantReviewViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.ListAPIView,
-                        generics.RetrieveAPIView, generics.DestroyAPIView):
+class RestaurantReviewViewSet(BaseReviewUpdateMixin, viewsets.ViewSet,
+                              generics.ListCreateAPIView, generics.RetrieveDestroyAPIView):
     queryset = RestaurantReview.objects.all()
     serializer_class = RestaurantReviewSerializer
+    review_model = RestaurantReview
+    review_serializer = RestaurantReviewSerializer
 
-    def get_permissions(self):
-        if self.action == 'list':
-            return [permissions.AllowAny()]
-        elif self.action == 'create':
-            return [permissions.IsAuthenticated(), IsOrderOwner()]
-        elif self.action in ['update', 'partial_update', 'destroy']:
-            return [permissions.IsAuthenticated(), IsOwnerOrAdmin()]
-        return super().get_permissions()
-
-    def partial_update(self, request, *args, **kwargs):
-        """Chỉ cho phép chỉnh sửa 'comment' hoặc 'star'."""
-        allowed_fields = {'comment', 'star'}
-        invalid_fields = set(request.data.keys()) - allowed_fields
-        if invalid_fields:
-            return Response(
-                {"detail": f"Chỉ có thể chỉnh sửa các trường: {', '.join(allowed_fields)}."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        return super().partial_update(request, *args, **kwargs)
 
 # foodspots/views.py
 from rest_framework import viewsets, status

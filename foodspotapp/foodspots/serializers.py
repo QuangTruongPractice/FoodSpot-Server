@@ -76,7 +76,7 @@ class FoodCategorySerializer(ModelSerializer):
 class FoodPriceSerializer(serializers.ModelSerializer):
     class Meta:
         model = FoodPrice
-        fields = ['food', 'time_serve', 'price']
+        fields = ['time_serve', 'price']
 
 class FoodSerializers(BaseSerializer):
     prices = FoodPriceSerializer(many=True, read_only=True)  # Lấy tất cả giá và thời gian phục vụ
@@ -86,10 +86,20 @@ class FoodSerializers(BaseSerializer):
         fields = ["id", "name", "restaurant", "image", "food_category", "prices", "description"]
 
 class OrderDetailSerializer(BaseSerializer):
-    food = FoodSerializers()
+    food = serializers.SerializerMethodField()
     class Meta:
         model = OrderDetail
-        fields = ['id', 'food', 'order', 'quantity', 'sub_total']
+        fields = ['id', 'food', 'order', 'time_serve','quantity', 'sub_total']
+
+    def get_food(self, obj):
+        food_data = FoodSerializers(obj.food).data  # Lấy thông tin đầy đủ món ăn
+        # Lọc ra chỉ 1 price ứng với time_serve của OrderDetail hiện tại
+        matched_price = next(
+            (price for price in food_data['prices'] if price['time_serve'] == obj.time_serve),
+            None
+        )
+        food_data['prices'] = [matched_price] if matched_price else []
+        return food_data
 
 class OrderSerializer(BaseSerializer):
     address = serializers.PrimaryKeyRelatedField(queryset=Address.objects.all())
