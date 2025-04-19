@@ -1,3 +1,251 @@
+from allauth.headless.base.views import APIView
+from django.http import HttpResponse
+from rest_framework.exceptions import ValidationError
+from rest_framework.response import Response
+from rest_framework import viewsets, permissions, status, generics
+from rest_framework.decorators import action, api_view
+from .perms import IsAdminUser, IsOrderOwner, IsOwnerOrAdmin, IsRestaurantOwner
+from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, Restaurant, FoodPrice
+from .serializers import (OrderSerializer, OrderDetailSerializer, FoodSerializers,
+                          FoodCategorySerializer, FoodReviewSerializers, RestaurantReviewSerializer, FoodPriceSerializer)
+
+
+def index(request):
+    return HttpResponse("foodspots")
+
+
+class OrderViewSet(viewsets.ViewSet):
+    permission_classes = [permissions.IsAuthenticated, IsOrderOwner]
+
+    def get_object(self):
+        """
+        Lấy đối tượng Order từ pk trong URL, nếu không có thì trả về lỗi 404.
+        """
+        return get_object_or_404(Order, pk=self.kwargs.get('pk'))
+
+    def list(self, request, *args, **kwargs):
+        user = self.request.user
+        # Lọc đơn hàng theo vai trò người dùng
+        orders = Order.objects.filter(
+            restaurant__owner=user) if user.role == 'RESTAURANT_USER' else Order.objects.filter(user=user)
+        return Response(OrderSerializer(orders, many=True).data)
+
+    def retrieve(self, request, *args, **kwargs):
+        """
+        Truyền chi tiết đơn hàng, bao gồm cả order_details.
+        """
+        order = self.get_object()
+
+        class OrderDetailWithItemsSerializer(OrderSerializer):
+            order_details = OrderDetailSerializer(many=True, read_only=True)
+
+            class Meta(OrderSerializer.Meta):
+                fields = OrderSerializer.Meta.fields + ['order_details']
+
+        # Serialize và trả về chi tiết đơn hàng
+        return Response(OrderDetailWithItemsSerializer(order).data)
+
+    def create(self, request, *args, **kwargs):
+        """
+        Tạo đơn hàng mới và gán người dùng hiện tại vào đơn hàng.
+        """
+        order_serializer = OrderSerializer(data=request.data)
+        if order_serializer.is_valid():
+            order_serializer.save(user=request.user)
+            return Response(order_serializer.data, status=status.HTTP_201_CREATED)
+        return Response(order_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def partial_update(self, request, *args, **kwargs):
+        """
+        Cập nhật trạng thái đơn hàng.
+        """
+        order = self.get_object()
+        status = request.data.get('status')
+
+        if not status:
+            return Response({"error": "Chỉ được cập nhật trạng thái đơn hàng."}, status=status.HTTP_400_BAD_REQUEST)
+
+        order.status = status
+        order.save()  # Lưu lại đối tượng order đã cập nhật
+        return Response(OrderSerializer(order).data)
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Xóa đơn hàng nếu người dùng có quyền xóa, chỉ khi đơn hàng thuộc về người dùng hiện tại hoặc chủ nhà hàng.
+        """
+        order = self.get_object()
+
+        # Kiểm tra quyền xóa đơn hàng
+        if order.user != request.user and order.restaurant.owner != request.user:
+            return Response({"detail": "Bạn không có quyền xóa đơn hàng này."}, status=status.HTTP_403_FORBIDDEN)
+
+        # Xóa đơn hàng
+        order.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+class OrderDetailViewSet(viewsets.ModelViewSet):
+    queryset = OrderDetail.objects.select_related(
+        'food'
+    )
+    serializer_class = OrderDetailSerializer
+
+
+class FoodPriceViewSet(viewsets.ModelViewSet):
+    queryset = FoodPrice.objects.select_related('food')
+    serializer_class = FoodPriceSerializer
+
+    def partial_update(self, request, *args, **kwargs):
+        """Cập nhật chỉ trường price."""
+        if set(request.data.keys()) != {"price"}:
+            raise ValidationError({"detail": "Chỉ được phép cập nhật trường 'price'."})
+
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
+class FoodViewSet(viewsets.ViewSet):
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            permission_classes = [AllowAny]  # Công khai cho list và retrieve
+        else:
+            permission_classes = [IsAuthenticated, IsRestaurantOwner]  # Yêu cầu xác thực cho create, update, delete
+        return [permission() for permission in permission_classes]
+
+    def get_queryset(self):
+        return Food.objects.prefetch_related('menus__restaurant').all()
+
+    def get_object(self, pk):
+        queryset = self.get_queryset()
+        return get_object_or_404(queryset, pk=pk)
+
+    def list(self, request):
+        queryset = self.get_queryset()
+
+        # Lọc theo tên món ăn
+        name = request.query_params.get('name')
+        if name:
+            queryset = queryset.filter(name__icontains=name)
+
+        # Lọc theo giá
+        price_min = request.query_params.get('price_min')
+        if price_min:
+            queryset = queryset.filter(price__gte=price_min)
+
+        price_max = request.query_params.get('price_max')
+        if price_max:
+            queryset = queryset.filter(price__lte=price_max)
+
+        # Lọc theo danh mục
+        food_category = request.query_params.get('food_category')
+        if food_category:
+            queryset = queryset.filter(food_category__name__icontains=food_category)
+
+        # Lọc theo tên nhà hàng
+        restaurant_name = request.query_params.get('restaurant_name')
+        if restaurant_name:
+            queryset = queryset.filter(menus__restaurant__name__icontains=restaurant_name)
+
+        serializer = FoodSerializers(queryset, many=True)
+        return Response(serializer.data)
+
+    def retrieve(self, request, pk=None):
+        food = self.get_object(pk)
+        serializer = FoodSerializers(food)
+        return Response(serializer.data)
+
+    def create(self, request):
+        serializer = FoodSerializers(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def update(self, request, pk=None):
+        food = self.get_object(pk)
+        serializer = FoodSerializers(food, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def destroy(self, request, pk=None):
+        food = self.get_object(pk)
+        food.delete()
+        return Response({"message": "Món ăn đã bị xóa thành công."}, status=status.HTTP_204_NO_CONTENT)
+
+class FoodCategoryViewSet(viewsets.ModelViewSet):
+    queryset = FoodCategory.objects.all().order_by('id')  # Sắp xếp theo id
+    serializer_class = FoodCategorySerializer
+
+    def get_permissions(self):
+        if self.action == 'list':
+            return [permissions.AllowAny()]
+        return [permissions.IsAuthenticated(), IsAdminUser()]
+
+    def partial_update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        data = request.data
+        if 'name' not in data:
+            return Response(
+                {"detail": "Chỉ có thể cập nhật tên của danh mục."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
+
+class BaseReviewUpdateMixin(viewsets.ViewSet):
+    review_model = None
+    review_serializer = None
+
+    def get_permissions(self):
+        if hasattr(self, 'action'):  # Kiểm tra xem action có tồn tại không
+            if self.action == 'list':
+                return [permissions.AllowAny()]
+            elif self.action == 'create':
+                return [permissions.IsAuthenticated(), IsOrderOwner()]
+            elif self.action in ['update', 'partial_update', 'destroy']:
+                return [permissions.IsAuthenticated(), IsOwnerOrAdmin()]
+        return super().get_permissions()
+
+    def partial_update(self, request, pk=None):
+        try:
+            instance = self.review_model.objects.get(pk=pk)
+        except self.review_model.DoesNotExist:
+            return Response({"detail": "Không tìm thấy đánh giá."}, status=status.HTTP_404_NOT_FOUND)
+
+        allowed_fields = {'comment', 'star'}
+        invalid_fields = set(request.data.keys()) - allowed_fields
+        if invalid_fields:
+            return Response(
+                {"detail": f"Chỉ có thể chỉnh sửa các trường: {', '.join(allowed_fields)}."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = self.review_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+class FoodReviewViewSet(BaseReviewUpdateMixin, viewsets.ViewSet,
+                        generics.ListCreateAPIView, generics.RetrieveDestroyAPIView):
+    queryset = FoodReview.objects.all()
+    serializer_class = FoodReviewSerializers
+    review_model = FoodReview
+    review_serializer = FoodReviewSerializers
+
+class RestaurantReviewViewSet(BaseReviewUpdateMixin, viewsets.ViewSet,
+                              generics.ListCreateAPIView, generics.RetrieveDestroyAPIView):
+    queryset = RestaurantReview.objects.all()
+    serializer_class = RestaurantReviewSerializer
+    review_model = RestaurantReview
+    review_serializer = RestaurantReviewSerializer
+
+
 # foodspots/views.py
 from rest_framework import viewsets, status
 from rest_framework.response import Response
@@ -12,16 +260,37 @@ from .serializers import (
 )
 from .perms import RestaurantOwner
 
+from rest_framework import viewsets
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.decorators import action
+from .models import User
+from .serializers import UserSerializer
+
+from rest_framework import viewsets, status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.decorators import action
+from .models import User
+from .serializers import UserSerializer
+from django.db import IntegrityError
+
+from rest_framework import viewsets, status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.decorators import action
+from .models import User
+from .serializers import UserSerializer
+from django.db import IntegrityError
+
 class UserViewSet(viewsets.ViewSet):
     def get_permissions(self):
-        # Chỉ yêu cầu đăng nhập cho các hành động ghi (create, get_current_user)
-        if self.action in ['create', 'get_current_user']:
-            return [IsAuthenticated()]
-        # Hạn chế list và retrieve để chỉ ADMIN hoặc người dùng tự xem thông tin của mình
+        if self.action == 'register':
+            return []
         return [IsAuthenticated()]
 
     def list(self, request):
-        """Lấy danh sách người dùng (chỉ dành cho ADMIN)."""
         user = request.user
         if user.role != 'ADMIN':
             return Response({"error": "Only admins can view the user list."}, status=status.HTTP_403_FORBIDDEN)
@@ -31,7 +300,6 @@ class UserViewSet(viewsets.ViewSet):
         return Response(serializer.data)
 
     def retrieve(self, request, pk=None):
-        """Lấy chi tiết một người dùng (chỉ ADMIN hoặc chính người dùng đó)."""
         user = request.user
         try:
             target_user = User.objects.get(pk=pk)
@@ -45,7 +313,6 @@ class UserViewSet(viewsets.ViewSet):
         return Response(serializer.data)
 
     def create(self, request):
-        """Tạo người dùng mới (yêu cầu đăng nhập, chỉ ADMIN có thể tạo)."""
         user = request.user
         if user.role != 'ADMIN':
             return Response({"error": "Only admins can create new users."}, status=status.HTTP_403_FORBIDDEN)
@@ -56,9 +323,8 @@ class UserViewSet(viewsets.ViewSet):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(methods=['get', 'patch'], detail=False, url_path='current-user', permission_classes=[IsAuthenticated])
+    @action(methods=['get', 'patch'], detail=False, url_path='current-user')
     def get_current_user(self, request):
-        """Lấy và cập nhật thông tin người dùng hiện tại."""
         user = request.user
         if request.method == 'PATCH':
             serializer = UserSerializer(user, data=request.data, partial=True)
@@ -67,6 +333,54 @@ class UserViewSet(viewsets.ViewSet):
                 return Response(serializer.data)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         return Response(UserSerializer(user).data)
+
+    @action(methods=['post'], detail=False, url_path='register')
+    def register(self, request):
+        """Đăng ký người dùng mới (không yêu cầu đăng nhập)."""
+        print("Dữ liệu nhận được:", request.data)
+
+        # Kiểm tra dữ liệu đầu vào
+        if 'username' not in request.data or not request.data['username']:
+            return Response({"error": "Username is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if 'password' not in request.data or not request.data['password']:
+            return Response({"error": "Password is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if 'email' not in request.data or not request.data['email']:
+            return Response({"error": "Email is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Kiểm tra username và email có tồn tại trước không
+        username = request.data['username']
+        email = request.data['email']
+        if User.objects.filter(username=username).exists():
+            print(f"Username {username} already exists in the database.")
+            return Response({"error": "Username already exists"}, status=status.HTTP_400_BAD_REQUEST)
+        if User.objects.filter(email=email).exists():
+            print(f"Email {email} already exists in the database.")
+            return Response({"error": "Email already exists"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Sử dụng serializer để kiểm tra dữ liệu
+        serializer = UserSerializer(data=request.data)
+        if serializer.is_valid():
+            try:
+                user_data = serializer.validated_data
+                user_data['role'] = 'CUSTOMER'
+                user = User(**user_data)
+                user.set_password(request.data['password'])
+                user.save()
+                response_data = UserSerializer(user).data
+                print("Đăng ký thành công:", response_data)
+                return Response(response_data, status=status.HTTP_201_CREATED)
+            except IntegrityError as e:
+                error_message = str(e).lower()
+                print(f"IntegrityError occurred: {error_message}")
+                if 'username' in error_message:
+                    return Response({"error": "Username already exists"}, status=status.HTTP_400_BAD_REQUEST)
+                if 'email' in error_message:
+                    return Response({"error": "Email already exists"}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": f"An error occurred while saving the user: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        print("Serializer errors:", serializer.errors)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class UserAddressViewSet(viewsets.ViewSet):
     def get_permissions(self):
