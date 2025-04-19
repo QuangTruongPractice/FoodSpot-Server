@@ -80,10 +80,11 @@ class FoodPriceSerializer(serializers.ModelSerializer):
 
 class FoodSerializers(BaseSerializer):
     prices = FoodPriceSerializer(many=True, read_only=True)  # Lấy tất cả giá và thời gian phục vụ
+    restaurant_name = serializers.CharField(source='restaurant.name', read_only=True)
 
     class Meta:
         model = Food
-        fields = ["id", "name", "restaurant", "image", "food_category", "prices", "description"]
+        fields = ["id", "name", "restaurant", "restaurant_name", "image", "food_category", "prices", "description"]
 
 class OrderDetailSerializer(BaseSerializer):
     food = serializers.SerializerMethodField()

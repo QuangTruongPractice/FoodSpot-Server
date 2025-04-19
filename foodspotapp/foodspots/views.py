@@ -105,56 +105,52 @@ class FoodPriceViewSet(viewsets.ModelViewSet):
         self.perform_update(serializer)
         return Response(serializer.data)
 
-class FoodViewSet(viewsets.ViewSet):
+class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIView):
+    serializer_class = FoodSerializers
     # Phân quyền cho các phương thức
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
-            permission_classes = [IsAuthenticated]
+            permission_classes = [AllowAny]
         else:
             permission_classes = [IsAuthenticated, IsRestaurantOwner]
         return [permission() for permission in permission_classes]
 
     def get_queryset(self):
-        return Food.objects.prefetch_related('menus__restaurant').all()
-
-    def get_object(self, pk):
-        queryset = self.get_queryset()
-        return get_object_or_404(queryset, pk=pk)
-
-    def list(self, request):
-        queryset = self.get_queryset()
+        queryset = Food.objects.prefetch_related('menus__restaurant').all()
 
         # Lọc theo tên món ăn
-        name = request.query_params.get('name')
+        name = self.request.query_params.get('name')
         if name:
             queryset = queryset.filter(name__icontains=name)
 
         # Lọc theo giá
-        price_min = request.query_params.get('price_min')
+        price_min = self.request.query_params.get('price_min')
         if price_min:
             queryset = queryset.filter(price__gte=price_min)
 
-        price_max = request.query_params.get('price_max')
+        price_max = self.request.query_params.get('price_max')
         if price_max:
             queryset = queryset.filter(price__lte=price_max)
 
         # Lọc theo danh mục
-        food_category = request.query_params.get('food_category')
+        food_category = self.request.query_params.get('food_category')
         if food_category:
             queryset = queryset.filter(food_category__name__icontains=food_category)
 
+        category_id = self.request.query_params.get('category_id')
+        if category_id:
+            queryset = queryset.filter(food_category_id=category_id)
+
+        restaurant_id = self.request.query_params.get('restaurant_id')
+        if restaurant_id:
+            queryset = queryset.filter(menus__restaurant_id=restaurant_id)
+
         # Lọc theo tên nhà hàng
-        restaurant_name = request.query_params.get('restaurant_name')
+        restaurant_name = self.request.query_params.get('restaurant_name')
         if restaurant_name:
             queryset = queryset.filter(menus__restaurant__name__icontains=restaurant_name)
 
-        serializer = FoodSerializers(queryset, many=True)
-        return Response(serializer.data)
-
-    def retrieve(self, request, pk=None):
-        food = self.get_object(pk)
-        serializer = FoodSerializers(food)
-        return Response(serializer.data)
+        return queryset
 
     def create(self, request):
         serializer = FoodSerializers(data=request.data)
