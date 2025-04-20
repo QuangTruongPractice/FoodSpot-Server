@@ -117,7 +117,8 @@ food1 = Food.objects.create(
     is_available=True,
     star_rating=0.0,
     food_category=food_category1,
-    restaurant=restaurant1
+    restaurant=restaurant1,
+    image="https://res.cloudinary.com/dabb0yavq/image/upload/v1745126295/phobo_zdpdgi.webp"
 )
 FoodPrice.objects.create(food=food1, time_serve='MORNING', price=40000)
 FoodPrice.objects.create(food=food1, time_serve='EVENING', price=45000)
@@ -128,10 +129,59 @@ food2 = Food.objects.create(
     is_available=True,
     star_rating=0.0,
     food_category=food_category2,
-    restaurant=restaurant2
+    restaurant=restaurant2,
+    image="https://res.cloudinary.com/dabb0yavq/image/upload/v1745126267/trasua_mz8iyt.png"
 )
 FoodPrice.objects.create(food=food2, time_serve='NOON', price=30000)
 FoodPrice.objects.create(food=food2, time_serve='NIGHT', price=35000)
+
+food3 = Food.objects.create(
+    name='Bánh Mì Thịt',
+    description='Bánh mì Việt Nam với pate, chả lụa và rau sống',
+    is_available=True,
+    star_rating=0.0,
+    food_category=food_category1,
+    restaurant=restaurant1,
+    image="https://res.cloudinary.com/dabb0yavq/image/upload/v1745126856/banhmi_i3fnjf.jpg"
+)
+FoodPrice.objects.create(food=food3, time_serve='MORNING', price=20000)
+FoodPrice.objects.create(food=food3, time_serve='EVENING', price=22000)
+
+food4 = Food.objects.create(
+    name='Cơm Gà Xối Mỡ',
+    description='Cơm gà chiên giòn với nước mắm tỏi ớt đặc trưng',
+    is_available=True,
+    star_rating=0.0,
+    food_category=food_category1,
+    restaurant=restaurant2,
+    image="https://res.cloudinary.com/dabb0yavq/image/upload/v1745126864/comga_vgsucn.jpg"
+)
+FoodPrice.objects.create(food=food4, time_serve='MORNING', price=35000)
+FoodPrice.objects.create(food=food4, time_serve='EVENING', price=38000)
+
+food5 = Food.objects.create(
+    name='Mì Quảng',
+    description='Mì Quảng đậm đà với tôm, thịt và nước dùng vừa miệng',
+    is_available=True,
+    star_rating=0.0,
+    food_category=food_category1,
+    restaurant=restaurant1,
+    image="https://res.cloudinary.com/dabb0yavq/image/upload/v1745126877/mi-quang_lkgni3.jpg"
+)
+FoodPrice.objects.create(food=food5, time_serve='MORNING', price=40000)
+FoodPrice.objects.create(food=food5, time_serve='EVENING', price=45000)
+
+food6 = Food.objects.create(
+    name='Nước Cam Tươi',
+    description='Nước cam nguyên chất, mát lạnh và giàu vitamin C',
+    is_available=True,
+    star_rating=0.0,
+    food_category=food_category2,
+    restaurant=restaurant2,
+    image="https://res.cloudinary.com/dabb0yavq/image/upload/v1745126884/nuoccam_iz5sdm.jpg"
+)
+FoodPrice.objects.create(food=food6, time_serve='MORNING', price=15000)
+FoodPrice.objects.create(food=food6, time_serve='EVENING', price=17000)
 print("Đã tạo Food:", food1, food2)
 
 # Tạo menu
@@ -142,6 +192,8 @@ menu1 = Menu.objects.create(
     time_serve='EVENING'
 )
 menu1.foods.add(food1)
+menu1.foods.add(food3)
+menu1.foods.add(food4)
 menu2 = Menu.objects.create(
     restaurant=restaurant2,
     name='Thực đơn đêm',
@@ -149,6 +201,8 @@ menu2 = Menu.objects.create(
     time_serve='NIGHT'
 )
 menu2.foods.add(food2)
+menu2.foods.add(food5)
+menu2.foods.add(food6)
 print("Đã tạo Menu:", menu1, menu2)
 
 # Tạo giỏ hàng

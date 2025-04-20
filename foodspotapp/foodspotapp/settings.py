@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 from pathlib import Path
+import corsheaders.middleware
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -21,6 +22,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-qri44j=$2%je#5+k@_4z9y^&e9kgb^@5e(16u(bj@2nk_wecl@'
+
+# CLIENT_ID = 'Bub4SNep8terpqvBRqpknxW7WvwLlKcC4OB3bzun'
+# CLIENT_SECRET = 'wuUjLAz7ntWmvEdR2EU9vWQgKqUxD439iER4ugIY18xGHtLg41mSm6oKjI6jWm39how87TGbksNozFhETENTxvbz5AXnSEU6UOd0l8fVERhZpoTlwU2dPho1sN5lplzJ'
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -47,9 +51,26 @@ INSTALLED_APPS = [
     'allauth.socialaccount.providers.google',
     'oauth2_provider',
     'drf_yasg',
+    'corsheaders',
 ]
+OAUTH2_PROVIDER = { 'OAUTH2_BACKEND_CLASS': 'oauth2_provider.oauth2_backends.JSONOAuthLibCore' }
 
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'oauth2_provider.contrib.rest_framework.OAuth2Authentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}
+
+OAUTH2_PROVIDER = {
+    'SCOPES': {'read': 'Read scope', 'write': 'Write scope'},
+    'ACCESS_TOKEN_EXPIRE_SECONDS': 360000,  # Token hết hạn sau 100 giờ
+}
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -59,14 +80,26 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'allauth.account.middleware.AccountMiddleware',
 ]
-
+CORS_ALLOW_ALL_ORIGINS = True
 ROOT_URLCONF = 'foodspotapp.urls'
 
+
 REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'oauth2_provider.contrib.rest_framework.OAuth2Authentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 1
+    'PAGE_SIZE': 2,
 }
 
+OAUTH2_PROVIDER = {
+    'SCOPES': {'read': 'Read scope', 'write': 'Write scope'},
+    'ACCESS_TOKEN_EXPIRE_SECONDS': 360000,  # Token hết hạn sau 100 giờ
+}
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
@@ -88,17 +121,7 @@ WSGI_APPLICATION = 'foodspotapp.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
-#Nghia
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.mysql',
-#         'NAME': 'foodspotdb',
-#         'USER': 'root',
-#         'PASSWORD': 'nghia142004',
-#         'HOST': ''
-#     }
-# }
-#Truong
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -173,14 +196,6 @@ import cloudinary.uploader
 from cloudinary.utils import cloudinary_url
 
 # Configuration
-#Nghia
-# cloudinary.config(
-#     cloud_name = "ddke8odpp",
-#     api_key = "967889279184172",
-#     api_secret = "CLOUDINARY_URL=cloudinary://967889279184172:kSu8NtNakUyi5fwtUdcumtLRdA4@ddke8odpp", # Click 'View API Keys' above to copy your API secret
-#     secure=True
-#
-#Truong
 cloudinary.config(
     cloud_name='derx1izam',
     api_key='826692895649512',

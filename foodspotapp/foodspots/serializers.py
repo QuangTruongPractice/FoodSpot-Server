@@ -15,7 +15,22 @@ class BaseSerializer(ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'email', 'first_name', 'last_name', 'phone_number', 'role']
+        fields = ['username', 'email', 'first_name', 'last_name', 'phone_number', 'role', 'password']
+        extra_kwargs = {
+            'password': {'write_only': True},
+            'role': {'required': False},
+            'phone_number': {'required': False},
+        }
+
+    def validate_email(self, value):
+        if not value:
+            raise serializers.ValidationError("Email is required")
+        return value
+
+    def validate_username(self, value):
+        if not value:
+            raise serializers.ValidationError("Username is required")
+        return value
 
 class AddressSerializer(serializers.ModelSerializer):
     class Meta:
@@ -80,11 +95,10 @@ class FoodPriceSerializer(serializers.ModelSerializer):
 
 class FoodSerializers(BaseSerializer):
     prices = FoodPriceSerializer(many=True, read_only=True)  # Lấy tất cả giá và thời gian phục vụ
-    restaurant_name = serializers.CharField(source='restaurant.name', read_only=True)
 
     class Meta:
         model = Food
-        fields = ["id", "name", "restaurant", "restaurant_name", "image", "food_category", "prices", "description"]
+        fields = ["id", "name", "restaurant", "image", "food_category", "prices", "description"]
 
 class OrderDetailSerializer(BaseSerializer):
     food = serializers.SerializerMethodField()
@@ -126,5 +140,3 @@ class RestaurantReviewSerializer(BaseSerializer):
     class Meta:
         model = RestaurantReview
         fields = ['id', 'user', 'user_name', 'restaurant', 'restaurant_name','comment', 'created_date', 'star']
-
-
