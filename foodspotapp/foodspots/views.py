@@ -8,7 +8,7 @@ from .perms import IsAdminUser, IsOrderOwner, IsOwnerOrAdmin, IsRestaurantOwner
 from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, Restaurant, FoodPrice
 from .serializers import (OrderSerializer, OrderDetailSerializer, FoodSerializers,
                           FoodCategorySerializer, FoodReviewSerializers, RestaurantReviewSerializer, FoodPriceSerializer)
-
+from django.db.models import Q
 
 def index(request):
     return HttpResponse("foodspots")
@@ -117,6 +117,13 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
 
     def get_queryset(self):
         queryset = Food.objects.prefetch_related('menus__restaurant').all()
+
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search) |
+                Q(menus__restaurant__name__icontains=search)
+            ).distinct()
 
         # Lọc theo tên món ăn
         name = self.request.query_params.get('name')
