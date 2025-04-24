@@ -53,19 +53,9 @@ INSTALLED_APPS = [
     'drf_yasg',
     'corsheaders',
 ]
-OAUTH2_PROVIDER = { 'OAUTH2_BACKEND_CLASS': 'oauth2_provider.oauth2_backends.JSONOAuthLibCore' }
-
-REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'oauth2_provider.contrib.rest_framework.OAuth2Authentication',
-        'rest_framework.authentication.SessionAuthentication',
-    ],
-    'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticated',
-    ],
-}
 
 OAUTH2_PROVIDER = {
+    'OAUTH2_BACKEND_CLASS': 'oauth2_provider.oauth2_backends.JSONOAuthLibCore',
     'SCOPES': {'read': 'Read scope', 'write': 'Write scope'},
     'ACCESS_TOKEN_EXPIRE_SECONDS': 360000,  # Token hết hạn sau 100 giờ
 }
@@ -96,10 +86,6 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': 2,
 }
 
-OAUTH2_PROVIDER = {
-    'SCOPES': {'read': 'Read scope', 'write': 'Write scope'},
-    'ACCESS_TOKEN_EXPIRE_SECONDS': 360000,  # Token hết hạn sau 100 giờ
-}
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',

@@ -169,7 +169,7 @@ food5 = Food.objects.create(
     image="https://res.cloudinary.com/dabb0yavq/image/upload/v1745126877/mi-quang_lkgni3.jpg"
 )
 FoodPrice.objects.create(food=food5, time_serve='MORNING', price=40000)
-FoodPrice.objects.create(food=food5, time_serve='EVENING', price=45000)
+FoodPrice.objects.create(food=food5, time_serve='NIGHT', price=45000)
 
 food6 = Food.objects.create(
     name='Nước Cam Tươi',
@@ -181,7 +181,7 @@ food6 = Food.objects.create(
     image="https://res.cloudinary.com/dabb0yavq/image/upload/v1745126884/nuoccam_iz5sdm.jpg"
 )
 FoodPrice.objects.create(food=food6, time_serve='MORNING', price=15000)
-FoodPrice.objects.create(food=food6, time_serve='EVENING', price=17000)
+FoodPrice.objects.create(food=food6, time_serve='NIGHT', price=17000)
 print("Đã tạo Food:", food1, food2)
 
 # Tạo menu

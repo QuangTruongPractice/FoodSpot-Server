@@ -130,14 +130,21 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
         if name:
             queryset = queryset.filter(name__icontains=name)
 
-        # Lọc theo giá
         price_min = self.request.query_params.get('price_min')
-        if price_min:
-            queryset = queryset.filter(price__gte=price_min)
-
         price_max = self.request.query_params.get('price_max')
-        if price_max:
-            queryset = queryset.filter(price__lte=price_max)
+
+        if price_min or price_max:
+            # Lọc theo giá trong bảng FoodPrice
+            food_prices = FoodPrice.objects.all()
+
+            if price_min:
+                food_prices = food_prices.filter(price__gte=price_min)
+
+            if price_max:
+                food_prices = food_prices.filter(price__lte=price_max)
+
+            # Lọc các món ăn có giá thỏa mãn
+            queryset = queryset.filter(id__in=food_prices.values('food_id')).distinct()
 
         # Lọc theo danh mục
         food_category = self.request.query_params.get('food_category')

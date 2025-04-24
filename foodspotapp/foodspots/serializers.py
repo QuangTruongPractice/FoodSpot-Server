@@ -15,7 +15,7 @@ class BaseSerializer(ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['username', 'email', 'first_name', 'last_name', 'phone_number', 'role', 'password']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone_number', 'role', 'password']
         extra_kwargs = {
             'password': {'write_only': True},
             'role': {'required': False},
@@ -76,12 +76,39 @@ class SubCartSerializer(serializers.ModelSerializer):
         fields = ['id', 'cart', 'restaurant', 'total_price', 'sub_cart_items']
 
 class MenuSerializer(serializers.ModelSerializer):
-    foods = serializers.StringRelatedField(many=True)  # Hiển thị tên các món ăn
-    restaurant = serializers.StringRelatedField()  # Hiển thị tên nhà hàng
+    foods = serializers.SerializerMethodField()
+    restaurant = serializers.StringRelatedField()
 
     class Meta:
         model = Menu
         fields = ['id', 'restaurant', 'name', 'description', 'time_serve', 'foods', 'is_active']
+
+    def get_foods(self, obj):
+        time_serve = obj.time_serve
+        queryset = obj.foods.all()
+
+        # Chỉ giữ món có giá trong time_serve này
+        queryset = [food for food in queryset if food.prices.filter(time_serve=time_serve).exists()]
+
+        serializer = FoodInMenuSerializer(queryset, many=True, context={'time_serve': time_serve})
+        return serializer.data
+
+class FoodInMenuSerializer(serializers.ModelSerializer):
+    price = serializers.SerializerMethodField()
+    image = serializers.SerializerMethodField()  # Override image để kiểm soát URL
+
+    class Meta:
+        model = Food
+        fields = ['id', 'name', 'image', 'description', 'price']
+
+    def get_price(self, obj):
+        time_serve = self.context.get('time_serve')
+        price_obj = obj.prices.filter(time_serve=time_serve).first()
+        return price_obj.price if price_obj else None
+
+    def get_image(self, obj):
+        # Nếu bạn lưu URL đầy đủ trong trường image
+        return str(obj.image) if obj.image else None
 
 class FoodCategorySerializer(ModelSerializer):
     class Meta:
