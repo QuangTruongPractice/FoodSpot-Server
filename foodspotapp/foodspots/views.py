@@ -388,14 +388,12 @@ class UserAddressViewSet(viewsets.ViewSet):
         return [IsAuthenticated()]
 
     def list(self, request):
-        """Liệt kê tất cả địa chỉ của người dùng đã xác thực (CUSTOMER) hoặc tất cả người dùng (ADMIN)."""
         user = request.user
-        if user.role == 'ADMIN':
-            queryset = User.objects.all()
-            serializer = UserAddressSerializer(queryset, many=True)
-        else:
-            queryset = Address.objects.filter(users=user)
-            serializer = UserAddressSerializer(queryset, many=True)
+        if not user.is_authenticated:
+            return Response({"error": "Yêu cầu xác thực."}, status=status.HTTP_401_UNAUTHORIZED)
+        if user.role not in ['ADMIN', 'CUSTOMER', 'RESTAURANT_USER']:
+            return Response({"error": "Vai trò không hợp lệ."}, status=status.HTTP_403_FORBIDDEN)
+        serializer = UserAddressSerializer(user)
         return Response(serializer.data)
 
     def retrieve(self, request, pk=None):
