@@ -272,7 +272,7 @@ from .models import User, Address, Restaurant, SubCart, SubCartItem, Menu
 from .serializers import (
     UserSerializer, UserAddressSerializer, RestaurantSerializer,
     RestaurantAddressSerializer, SubCartSerializer, SubCartItemSerializer,
-    MenuSerializer
+    MenuSerializer, AddressSerializer
 )
 from .perms import RestaurantOwner
 
@@ -396,27 +396,26 @@ class UserAddressViewSet(viewsets.ViewSet):
         return [IsAuthenticated()]
 
     def list(self, request):
-        """Lấy danh sách người dùng với địa chỉ (chỉ dành cho ADMIN)."""
         user = request.user
-        if user.role != 'ADMIN':
-            return Response({"error": "Only admins can view the user address list."}, status=status.HTTP_403_FORBIDDEN)
-
-        queryset = User.objects.all()
-        serializer = UserAddressSerializer(queryset, many=True)
+        if not user.is_authenticated:
+            return Response({"error": "Yêu cầu xác thực."}, status=status.HTTP_401_UNAUTHORIZED)
+        if user.role not in ['ADMIN', 'CUSTOMER', 'RESTAURANT_USER']:
+            return Response({"error": "Vai trò không hợp lệ."}, status=status.HTTP_403_FORBIDDEN)
+        serializer = UserAddressSerializer(user)
         return Response(serializer.data)
 
     def retrieve(self, request, pk=None):
-        """Lấy chi tiết người dùng với địa chỉ (chỉ ADMIN hoặc chính người dùng đó)."""
+        """Lấy chi tiết một địa chỉ cụ thể (chỉ ADMIN hoặc chủ sở hữu)."""
         user = request.user
         try:
-            target_user = User.objects.get(pk=pk)
-        except User.DoesNotExist:
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+            address = Address.objects.get(pk=pk)
+        except Address.DoesNotExist:
+            return Response({"error": "Không tìm thấy địa chỉ"}, status=status.HTTP_404_NOT_FOUND)
 
-        if user.role != 'ADMIN' and user != target_user:
-            return Response({"error": "You can only view your own address details."}, status=status.HTTP_403_FORBIDDEN)
+        if user.role != 'ADMIN' and address not in user.addresses.all():
+            return Response({"error": "Bạn chỉ có thể xem địa chỉ của mình."}, status=status.HTTP_403_FORBIDDEN)
 
-        serializer = UserAddressSerializer(target_user)
+        serializer = AddressSerializer(address)
         return Response(serializer.data)
 
 class RestaurantViewSet(viewsets.ViewSet):
@@ -474,6 +473,28 @@ class RestaurantViewSet(viewsets.ViewSet):
             self.check_object_permissions(request, restaurant)  # Kiểm tra quyền
             restaurant.delete()
             return Response({"message": "Restaurant deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+        except Restaurant.DoesNotExist:
+            return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=['get'])
+    def menus(self, request, pk=None):
+        """Lấy tất cả menus của nhà hàng."""
+        try:
+            restaurant = Restaurant.objects.get(pk=pk)
+            menus = Menu.objects.filter(restaurant=restaurant)  # Lọc các menu của nhà hàng
+            serializer = MenuSerializer(menus, many=True)
+            return Response(serializer.data)
+        except Restaurant.DoesNotExist:
+            return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=['get'])
+    def foods(self, request, pk=None):
+        """Lấy tất cả món ăn của nhà hàng."""
+        try:
+            restaurant = Restaurant.objects.get(pk=pk)
+            foods = Food.objects.filter(restaurant=restaurant)  # Lọc các món ăn của nhà hàng
+            serializer = FoodSerializers(foods, many=True)
+            return Response(serializer.data)
         except Restaurant.DoesNotExist:
             return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -689,5 +710,16 @@ class MenuViewSet(viewsets.ViewSet):
 
             menu.delete()
             return Response({"message": "Menu deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+        except Menu.DoesNotExist:
+            return Response({"error": "Menu not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=['get'])
+    def foods(self, request, pk=None):
+        """Lấy danh sách các món ăn của menu."""
+        try:
+            menu = Menu.objects.get(pk=pk)
+            foods = menu.foods.all()  # Giả sử menu có quan hệ với foods
+            food_serializer = FoodSerializers(foods, many=True)
+            return Response(food_serializer.data)
         except Menu.DoesNotExist:
             return Response({"error": "Menu not found"}, status=status.HTTP_404_NOT_FOUND)
