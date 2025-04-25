@@ -712,14 +712,3 @@ class MenuViewSet(viewsets.ViewSet):
             return Response({"message": "Menu deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
         except Menu.DoesNotExist:
             return Response({"error": "Menu not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    @action(detail=True, methods=['get'])
-    def foods(self, request, pk=None):
-        """Lấy danh sách các món ăn của menu."""
-        try:
-            menu = Menu.objects.get(pk=pk)
-            foods = menu.foods.all()  # Giả sử menu có quan hệ với foods
-            food_serializer = FoodSerializers(foods, many=True)
-            return Response(food_serializer.data)
-        except Menu.DoesNotExist:
-            return Response({"error": "Menu not found"}, status=status.HTTP_404_NOT_FOUND)

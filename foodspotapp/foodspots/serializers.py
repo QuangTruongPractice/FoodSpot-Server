@@ -107,8 +107,7 @@ class FoodInMenuSerializer(serializers.ModelSerializer):
         return price_obj.price if price_obj else None
 
     def get_image(self, obj):
-        # Nếu bạn lưu URL đầy đủ trong trường image
-        return str(obj.image) if obj.image else None
+        return obj.image.url if obj.image else None
 
 class FoodCategorySerializer(ModelSerializer):
     class Meta:
