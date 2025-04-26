@@ -2,12 +2,13 @@ from allauth.headless.base.views import APIView
 from django.http import HttpResponse
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
-from rest_framework import viewsets, permissions, status, generics
+from rest_framework import viewsets, permissions, status, generics, mixins
 from rest_framework.decorators import action, api_view
-from .perms import IsAdminUser, IsOrderOwner, IsOwnerOrAdmin, IsRestaurantOwner
-from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, Restaurant, FoodPrice
+from .perms import IsAdminUser, IsOrderOwner, IsOwnerOrAdmin, IsRestaurantOwner, IsOwner
+from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, Restaurant, FoodPrice, Follow, Favorite
 from .serializers import (OrderSerializer, OrderDetailSerializer, FoodSerializers,
-                          FoodCategorySerializer, FoodReviewSerializers, RestaurantReviewSerializer, FoodPriceSerializer)
+                          FoodCategorySerializer, FoodReviewSerializers, RestaurantReviewSerializer,
+                          FoodPriceSerializer, FollowSerializer, FavoriteSerializer)
 from django.db.models import Q
 
 def index(request):
@@ -391,6 +392,20 @@ class UserViewSet(viewsets.ViewSet):
         print("Serializer errors:", serializer.errors)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(methods=['get'], detail=False, url_path='current-user/follow')
+    def current_user_followed_restaurants(self, request):
+        user = request.user
+        follows = Follow.objects.filter(user=user)
+        serializer = FollowSerializer(follows, many=True)
+        return Response(serializer.data)
+
+    @action(methods=['get'], detail=False, url_path='current-user/favorite')
+    def current_user_favorite_restaurants(self, request):
+        user = request.user
+        favorites = Favorite.objects.filter(user=user)
+        serializer = FavoriteSerializer(favorites, many=True)
+        return Response(serializer.data)
+
 class UserAddressViewSet(viewsets.ViewSet):
     def get_permissions(self):
         """Yêu cầu xác thực cho tất cả các hành động."""
@@ -759,3 +774,31 @@ class MenuViewSet(viewsets.ViewSet):
             return Response({"message": "Menu deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
         except Menu.DoesNotExist:
             return Response({"error": "Menu not found"}, status=status.HTTP_404_NOT_FOUND)
+
+class FollowViewSet(mixins.ListModelMixin,
+                    mixins.UpdateModelMixin,
+                    mixins.CreateModelMixin,
+                    viewsets.GenericViewSet):
+    queryset = Follow.objects.all()
+    serializer_class = FollowSerializer
+
+    def get_permissions(self):
+        if self.action == 'list':  # GET
+            return [IsAdminUser()]  # Chỉ Admin mới được xem toàn bộ follow
+        elif self.action == 'partial_update':
+            return [permissions.IsAuthenticated(), IsOwner()]  # Chỉ user đã tạo follow được phép chỉnh sửa
+        return super().get_permissions()
+
+class FavoriteViewSet(mixins.ListModelMixin,
+                    mixins.UpdateModelMixin,
+                    mixins.CreateModelMixin,
+                    viewsets.GenericViewSet):
+    queryset = Favorite.objects.all()
+    serializer_class = FavoriteSerializer
+
+    def get_permissions(self):
+        if self.action == 'list':  # GET
+            return [IsAdminUser()]  # Chỉ Admin mới được xem toàn bộ follow
+        elif self.action == 'partial_update':  # PATCH
+            return [permissions.IsAuthenticated(), IsOwner()]  # Chỉ user đã tạo follow được phép chỉnh sửa
+        return super().get_permissions()

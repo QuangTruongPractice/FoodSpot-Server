@@ -14,6 +14,11 @@ FOLLOW_STATUS_CHOICES = [
     ('CANCEL', 'Cancel'),
 ]
 
+FAV_STATUS_CHOICES = [
+    ('FAVORITE', 'Favorite'),
+    ('CANCEL', 'Cancel'),
+]
+
 ORDER_STATUS_CHOICES = [
     ('PENDING', 'Pending'),
     ('ACCEPTED', 'Accepted'),
@@ -121,6 +126,22 @@ class Follow(models.Model):
     def save(self, *args, **kwargs):
         if self.user.role != 'CUSTOMER':
             raise ValueError("Only users with role CUSTOMER can follow a restaurant.")
+        super().save(*args, **kwargs)
+
+class Favorite(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fav_as_user')
+    food = models.ForeignKey('Food', on_delete=models.CASCADE, related_name='fav_as_food')
+    status = models.CharField(max_length=20, choices=FAV_STATUS_CHOICES, default='FAVORITE')
+
+    class Meta:
+        unique_together = ('user', 'food')
+
+    def __str__(self):
+        return f"{self.user.email} favorite {self.food.name} ({self.status})"
+
+    def save(self, *args, **kwargs):
+        if self.user.role != 'CUSTOMER':
+            raise ValueError("Only users with role CUSTOMER can add favorite a food.")
         super().save(*args, **kwargs)
 
 

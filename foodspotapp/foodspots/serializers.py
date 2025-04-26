@@ -1,6 +1,6 @@
 from rest_framework.serializers import ModelSerializer
 from rest_framework.fields import SerializerMethodField
-from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, FoodPrice
+from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, FoodPrice, Follow, Favorite
 from rest_framework import serializers
 from .models import User, Address, Restaurant, SubCart, SubCartItem, Menu
 
@@ -15,7 +15,7 @@ class BaseSerializer(ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone_number', 'role', 'password']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone_number', 'role', 'password', 'avatar']
         extra_kwargs = {
             'password': {'write_only': True},
             'role': {'required': False},
@@ -50,7 +50,7 @@ class RestaurantSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Restaurant
-        fields = ['id', 'name', 'phone_number', 'owner', 'star_rating', 'address']
+        fields = ['id', 'name', 'avatar', 'phone_number', 'owner', 'star_rating', 'address']
 
 class RestaurantAddressSerializer(serializers.ModelSerializer):
     address = AddressSerializer()
@@ -168,3 +168,13 @@ class RestaurantReviewSerializer(BaseSerializer):
     class Meta:
         model = RestaurantReview
         fields = ['id', 'user', 'user_name', 'restaurant', 'restaurant_name','comment', 'created_date', 'star']
+
+class FollowSerializer(BaseSerializer):
+    class Meta:
+        model = Follow
+        fields = ['id', 'user', 'restaurant', 'status']
+
+class FavoriteSerializer(BaseSerializer):
+    class Meta:
+        model = Favorite
+        fields = ['id', 'user', 'food', 'status']
