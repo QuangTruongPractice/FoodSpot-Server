@@ -85,23 +85,25 @@ class MenuSerializer(serializers.ModelSerializer):
 
     def get_foods(self, obj):
         time_serve = obj.time_serve
-        queryset = obj.foods.all()
-
-        # Chỉ giữ món có giá trong time_serve này
-        queryset = [food for food in queryset if food.prices.filter(time_serve=time_serve).exists()]
+        # Lọc foods theo restaurant và time_serve
+        queryset = obj.foods.filter(
+            restaurant=obj.restaurant,
+            prices__time_serve=time_serve
+        ).distinct()
 
         serializer = FoodInMenuSerializer(queryset, many=True, context={'time_serve': time_serve})
         return serializer.data
 
 class FoodInMenuSerializer(serializers.ModelSerializer):
     price = serializers.SerializerMethodField()
-    image = serializers.SerializerMethodField()  # Override image để kiểm soát URL
+    image = serializers.SerializerMethodField()
 
     class Meta:
         model = Food
         fields = ['id', 'name', 'image', 'description', 'price']
 
     def get_price(self, obj):
+        # Lấy time_serve từ context truyền vào
         time_serve = self.context.get('time_serve')
         price_obj = obj.prices.filter(time_serve=time_serve).first()
         return price_obj.price if price_obj else None
@@ -124,7 +126,7 @@ class FoodSerializers(BaseSerializer):
     restaurant_name = serializers.CharField(source="restaurant.name", read_only=True)
     class Meta:
         model = Food
-        fields = ["id", "name", "restaurant", "restaurant_name", "image", "food_category", "prices", "description"]
+        fields = ["id", "name", "restaurant", "restaurant_name","image", "food_category", "prices", "description"]
 
 class OrderDetailSerializer(BaseSerializer):
     food = serializers.SerializerMethodField()
