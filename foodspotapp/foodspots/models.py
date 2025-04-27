@@ -296,8 +296,9 @@ class FoodReview(models.Model):
 
 
 class Cart(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='carts')
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='carts')
     item_number = models.IntegerField(default=0)
+    total_price = models.FloatField(default=0.0)
 
     def __str__(self):
         return f"Cart of {self.user.email}"
@@ -307,6 +308,7 @@ class SubCart(models.Model):
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name='sub_carts')
     restaurant = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name='sub_carts')
     total_price = models.FloatField(default=0.0)
+    total_quantity = models.IntegerField(default=0)
 
     def __str__(self):
         return f"SubCart for {self.restaurant.name} in Cart {self.cart.id}"
@@ -327,3 +329,5 @@ class SubCartItem(models.Model):
 
     def __str__(self):
         return f"SubCartItem {self.food.name} in SubCart {self.sub_cart.id}"
+
+

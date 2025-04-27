@@ -2,7 +2,7 @@ from rest_framework.serializers import ModelSerializer
 from rest_framework.fields import SerializerMethodField
 from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, FoodPrice, Follow, Favorite
 from rest_framework import serializers
-from .models import User, Address, Restaurant, SubCart, SubCartItem, Menu
+from .models import User, Address, Restaurant, Cart, SubCart, SubCartItem, Menu
 
 class BaseSerializer(ModelSerializer):
     image = SerializerMethodField()
@@ -65,7 +65,7 @@ class SubCartItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SubCartItem
-        fields = ['id', 'food', 'restaurant', 'quantity', 'price']
+        fields = ['id', 'food', 'restaurant', 'sub_cart', 'quantity', 'price']
 
 class SubCartSerializer(serializers.ModelSerializer):
     sub_cart_items = SubCartItemSerializer(many=True, read_only=True)
@@ -73,7 +73,13 @@ class SubCartSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SubCart
-        fields = ['id', 'cart', 'restaurant', 'total_price', 'sub_cart_items']
+        fields = ['id', 'cart', 'restaurant', 'total_price', 'total_quantity', 'sub_cart_items']
+
+class CartSerializer(ModelSerializer):
+    user = UserSerializer()
+    class Meta:
+        model = Cart
+        fields = ['id', 'user', 'item_number', 'total_price']
 
 class MenuSerializer(serializers.ModelSerializer):
     foods = serializers.SerializerMethodField()

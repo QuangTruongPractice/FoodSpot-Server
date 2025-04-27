@@ -1,14 +1,16 @@
-from allauth.headless.base.views import APIView
+from rest_framework.views import APIView
 from django.http import HttpResponse
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework import viewsets, permissions, status, generics, mixins
 from rest_framework.decorators import action, api_view
 from .perms import IsAdminUser, IsOrderOwner, IsOwnerOrAdmin, IsRestaurantOwner, IsOwner
-from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, Restaurant, FoodPrice, Follow, Favorite
+from .models import (Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, Restaurant,
+                     FoodPrice, Follow, Favorite, Cart, SubCart, SubCartItem)
 from .serializers import (OrderSerializer, OrderDetailSerializer, FoodSerializers,
                           FoodCategorySerializer, FoodReviewSerializers, RestaurantReviewSerializer,
-                          FoodPriceSerializer, FollowSerializer, FavoriteSerializer)
+                          FoodPriceSerializer, FollowSerializer, FavoriteSerializer, CartSerializer,
+                          SubCartSerializer, SubCartItemSerializer)
 from django.db.models import Q
 
 def index(request):
@@ -262,7 +264,6 @@ class RestaurantReviewViewSet(BaseReviewUpdateMixin, viewsets.ViewSet,
     serializer_class = RestaurantReviewSerializer
     review_model = RestaurantReview
     review_serializer = RestaurantReviewSerializer
-
 
 # foodspots/views.py
 from rest_framework import viewsets, status
@@ -580,7 +581,46 @@ class RestaurantAddressViewSet(viewsets.ViewSet):
         except Restaurant.DoesNotExist:
             return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
 
+class CartViewSet(viewsets.ViewSet, generics.DestroyAPIView):
+    serializer_class = CartSerializer
+    queryset = Cart.objects.all()
+    permission_classes = [permissions.IsAuthenticated]
+
+    @action(methods=['get'], url_path='my-cart', detail=False)
+    def get_my_cart(self, request):
+        try:
+            cart = Cart.objects.get(user=request.user)
+        except Cart.DoesNotExist:
+            return Response(
+                {"error": "Giỏ hàng không tồn tại."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        return Response(CartSerializer(cart).data)
+
+    @action(methods=['get'], url_path='sub-carts', detail=False)
+    def get_my_sub_cart(self, request):
+        try:
+            cart = Cart.objects.get(user=request.user)
+        except Cart.DoesNotExist:
+            return Response(
+                {"error": "Giỏ hàng không tồn tại."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        sub_carts = SubCart.objects.filter(cart=cart)
+        serializer = SubCartSerializer(sub_carts, many=True)
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def get_permissions(self):
+        if self.action in ['get_my_cart']:
+            return [permissions.IsAuthenticated()]
+        return [permissions.AllowAny()]
+
 class SubCartViewSet(viewsets.ViewSet):
+    serializer_class = SubCartSerializer
+    queryset = SubCart.objects.all()
     def get_permissions(self):
         # Yêu cầu đăng nhập cho tất cả hành động vì giỏ hàng là dữ liệu cá nhân
         return [IsAuthenticated()]
@@ -633,7 +673,41 @@ class SubCartViewSet(viewsets.ViewSet):
         except SubCart.DoesNotExist:
             return Response({"error": "SubCart not found"}, status=status.HTTP_404_NOT_FOUND)
 
+    @action(methods=['get'], url_path='restaurant-sub-cart', detail=False)
+    def get_sub_cart(self, request):
+        restaurant_id = request.query_params.get('restaurantId')
+        user_id = request.query_params.get('userId')
+
+        cart = get_object_or_404(Cart, user__id=user_id)
+        sub_cart = SubCart.objects.filter(cart__id=cart.id, restaurant__id=restaurant_id).first()
+
+        if not sub_cart:
+            return Response({"detail": "Không tìm thấy giỏ hàng"}, status=404)
+
+        return Response(SubCartSerializer(sub_cart).data)
+
+    @action(methods=['post'], url_path='delete-sub-carts', detail=False)
+    def delete_multiple(self, request):
+        cart_id = request.data.get('cartId')
+        items_number = request.data.get('itemsNumber')
+        ids = request.data.get('ids', [])
+        cart = get_object_or_404(Cart, pk=cart_id)
+
+        if ids:
+            ids = [int(id) for id in ids]
+            SubCart.objects.filter(id__in=ids).delete()
+
+        cart.item_number -= items_number
+        cart.save()
+
+        if cart.item_number == 0:
+            cart.delete()
+
+        return Response({"message": "Xóa sub cart thành công!"}, status=status.HTTP_200_OK)
+
 class SubCartItemViewSet(viewsets.ViewSet):
+    serializer_class = SubCartItemSerializer
+    queryset = SubCartItem.objects.all()
     def get_permissions(self):
         # Yêu cầu đăng nhập cho tất cả hành động vì liên quan đến giỏ hàng
         return [IsAuthenticated()]
@@ -802,3 +876,85 @@ class FavoriteViewSet(mixins.ListModelMixin,
         elif self.action == 'partial_update':  # PATCH
             return [permissions.IsAuthenticated(), IsOwner()]  # Chỉ user đã tạo follow được phép chỉnh sửa
         return super().get_permissions()
+
+class AddItemToCart(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        food_id = int(request.data.get('food_id'))
+        quantity = int(request.data.get('quantity', 1))
+        time_serve = request.data.get('time_serve')
+
+        # Lấy thực phẩm từ database
+        food = get_object_or_404(Food, id=food_id)
+        restaurant = food.restaurant
+
+        # Lấy giá của thực phẩm cho thời gian phục vụ cụ thể
+        food_price = get_object_or_404(FoodPrice, food=food, time_serve=time_serve)
+        price = food_price.price
+
+        print('food name: ', food.name)
+        print('quantity: ', quantity)
+
+        cart, created = Cart.objects.get_or_create(user=user)
+
+        sub_cart, created = SubCart.objects.get_or_create(cart=cart, restaurant=restaurant)
+        # them hoac cap nhat
+        sub_cart_item, created = SubCartItem.objects.get_or_create(
+            food=food, sub_cart=sub_cart,
+            defaults={'restaurant': restaurant,
+                      'quantity': quantity,
+                      'price': price * quantity,}
+        )
+        if not created:
+            sub_cart_item.quantity += quantity
+            print('sub cart item quantity: ', sub_cart_item.quantity)
+            sub_cart_item.price = sub_cart_item.quantity * price
+            print('sub cart item price: ', sub_cart_item.price)
+            sub_cart_item.save()
+
+        total_price = sum(item.price for item in sub_cart.sub_cart_items.all())
+        total_quantity = sum(item.quantity for item in sub_cart.sub_cart_items.all())
+        sub_cart.total_price = total_price
+        sub_cart.total_quantity = total_quantity
+        sub_cart.save()
+
+        items_number = cart.sub_carts.all().count()
+        cart.items_number = items_number
+        cart.save()
+
+        return Response({'message': 'Thêm thành công!', 'cart': CartSerializer(cart).data}
+                        , status=status.HTTP_200_OK)
+
+class UpdateItemToSubCart(APIView):
+
+    def patch(self, request, *args, **kwargs):
+        sub_cart_item_id = int(request.data.get('sub_cart_item_id'))
+        quantity = int(request.data.get('quantity'))
+        time_serve = request.data.get('time_serve', 'default_time')  # Thêm thông tin time_serve từ client
+
+        sub_cart_item = get_object_or_404(SubCartItem, id=sub_cart_item_id)
+
+        food = sub_cart_item.food
+        # Lấy giá từ FoodPrice thay vì trực tiếp từ food
+        try:
+            food_price = FoodPrice.objects.get(food=food, time_serve=time_serve)
+            price = food_price.price
+        except FoodPrice.DoesNotExist:
+            return Response({"error": "Không tìm thấy giá cho món ăn tại thời gian phục vụ này."},
+                            status=status.HTTP_404_NOT_FOUND)
+
+        sub_cart = sub_cart_item.sub_cart
+
+        # Cập nhật số lượng và giá trị
+        sub_cart_item.quantity += quantity
+        sub_cart_item.price = sub_cart_item.quantity * price
+
+        sub_cart.total_quantity += quantity
+        sub_cart.total_price += quantity * price
+
+        sub_cart_item.save()
+        sub_cart.save()
+
+        return Response({"message": "Cập nhật thành công."}, status=status.HTTP_200_OK)
