@@ -6,12 +6,17 @@ from rest_framework import viewsets, permissions, status, generics, mixins
 from rest_framework.decorators import action, api_view
 from .perms import IsAdminUser, IsOrderOwner, IsOwnerOrAdmin, IsRestaurantOwner, IsOwner
 from .models import (Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, Restaurant,
-                     FoodPrice, Follow, Favorite, Cart, SubCart, SubCartItem)
+                     FoodPrice, Follow, Favorite, Cart, SubCart, SubCartItem, Payment)
 from .serializers import (OrderSerializer, OrderDetailSerializer, FoodSerializers,
                           FoodCategorySerializer, FoodReviewSerializers, RestaurantReviewSerializer,
                           FoodPriceSerializer, FollowSerializer, FavoriteSerializer, CartSerializer,
                           SubCartSerializer, SubCartItemSerializer)
 from django.db.models import Q
+from django.db import transaction
+import uuid
+import hmac
+import hashlib
+import requests
 
 def index(request):
     return HttpResponse("foodspots")
@@ -85,6 +90,58 @@ class OrderViewSet(viewsets.ViewSet):
         # Xóa đơn hàng
         order.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(methods=['post'], detail=False, url_path='checkout')
+    def checkout(self, request):
+        """
+        Xử lý quy trình đặt hàng hoàn chỉnh (gồm Order + Payment + OrderDetail).
+        Dành cho cả COD và MoMo.
+        """
+        # Lấy dữ liệu từ request.data
+        user = request.user
+        sub_cart_id = request.data.get("sub_cart_id")
+        payment_method = request.data.get("payment_method")
+        ship_fee = float(request.data.get('ship_fee'))
+        total = float(request.data.get('total_price'))  # da bao gom phi ship
+        ship_address_id = int(request.data.get("ship_address")) #dia chi nguoi dung
+
+        sub_cart = get_object_or_404(SubCart, id=sub_cart_id)
+        ship_address = get_object_or_404(Address, id=ship_address_id)
+        cart = sub_cart.cart
+        quantity = 0
+        try:
+            with transaction.atomic():
+                order = Order.objects.create(user=user,
+                                             restaurant=sub_cart.restaurant,
+                                             address=ship_address,
+                                             shipping_fee=ship_fee,
+                                             total=total,)
+
+                Payment.objects.create(order=order,
+                                       total_payment=total,
+                                       payment_method=payment_method,)
+
+                for s in sub_cart.sub_cart_items.all():
+                    OrderDetail.objects.create(food=s.food,
+                                               order=order,
+                                               quantity=s.quantity,
+                                               sub_total=s.price,
+                                               time_serve=s.time_serve)
+                    quantity += s.quantity
+
+                sub_cart.delete()
+                cart.item_number -= quantity
+
+                cart.save()
+                if cart.item_number == 0:
+                    cart.delete()
+
+                return Response({"message": "Đặt hàng thành công.",
+                                 "order_id": order.id}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 class OrderDetailViewSet(viewsets.ModelViewSet):
     queryset = OrderDetail.objects.select_related(
@@ -668,7 +725,11 @@ class SubCartViewSet(viewsets.ViewSet):
 
         try:
             sub_cart = SubCart.objects.get(pk=pk, cart__user=user)
+            cart = sub_cart.cart
             sub_cart.delete()
+            if not cart.sub_carts.exists():  # Kiểm tra nếu cart không còn sub_cart nào
+                cart.delete()
+
             return Response({"message": "SubCart deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
         except SubCart.DoesNotExist:
             return Response({"error": "SubCart not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -689,19 +750,23 @@ class SubCartViewSet(viewsets.ViewSet):
     @action(methods=['post'], url_path='delete-sub-carts', detail=False)
     def delete_multiple(self, request):
         cart_id = request.data.get('cartId')
-        items_number = request.data.get('itemsNumber')
         ids = request.data.get('ids', [])
+
         cart = get_object_or_404(Cart, pk=cart_id)
-
         if ids:
-            ids = [int(id) for id in ids]
-            SubCart.objects.filter(id__in=ids).delete()
-
-        cart.item_number -= items_number
-        cart.save()
-
-        if cart.item_number == 0:
-            cart.delete()
+            ids = [int(id) for id in ids] #chuyen thanh int
+            sub_carts_to_delete = SubCart.objects.filter(id__in=ids, cart=cart)
+            # Cập nhật lại tổng số lượng sản phẩm trong Cart trước khi xóa
+            total_quantity = 0
+            for sub_cart in sub_carts_to_delete:
+                total_quantity += sub_cart.total_quantity
+            sub_carts_to_delete.delete()
+            # Cập nhật lại item_number trong Cart
+            cart.item_number -= total_quantity
+            cart.save()
+            # Nếu Cart không còn sản phẩm nào, xóa Cart
+            if cart.item_number == 0:
+                cart.delete()
 
         return Response({"message": "Xóa sub cart thành công!"}, status=status.HTTP_200_OK)
 
@@ -771,10 +836,61 @@ class SubCartItemViewSet(viewsets.ViewSet):
 
         try:
             sub_cart_item = SubCartItem.objects.get(pk=pk, sub_cart__cart__user=user)
+            sub_cart = sub_cart_item.sub_cart  # Lưu lại sub_cart trước khi xóa
+            cart = sub_cart.cart  # Lưu lại cart trước khi xóa
             sub_cart_item.delete()
-            return Response({"message": "SubCartItem deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+            # Kiểm tra nếu SubCart không còn item nào thì xóa luôn SubCart
+            if not sub_cart.sub_cart_items.exists():  # Kiểm tra nếu sub_cart không còn item nào
+                sub_cart.delete()
+                # Kiểm tra nếu Cart không còn SubCart nào thì xóa luôn Cart
+                if not cart.sub_carts.exists():  # Kiểm tra nếu cart không còn sub_cart nào
+                    cart.delete()
+
+            return Response({"message": "SubCartItem and related SubCart and Cart deleted successfully."},
+                            status=status.HTTP_204_NO_CONTENT)
+
         except SubCartItem.DoesNotExist:
             return Response({"error": "SubCartItem not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(methods=['post'], detail=False, url_path='delete-multiple')
+    def delete_multiple(self, request):
+        cart_id = request.data.get('cartId')
+        ids = request.data.get('ids', [])
+
+        cart = get_object_or_404(Cart, pk=cart_id)
+
+        if ids:
+            ids = [int(id) for id in ids]
+            sub_cart_items_to_delete = SubCartItem.objects.filter(id__in=ids, sub_cart__cart=cart)
+
+            for sub_cart_item in sub_cart_items_to_delete:
+                sub_cart = sub_cart_item.sub_cart
+
+                # Cập nhật sub_cart.total_quantity và total_price
+                sub_cart.total_quantity -= sub_cart_item.quantity
+                sub_cart.total_price -= sub_cart_item.quantity * sub_cart_item.price
+                sub_cart.save()
+
+                # Cập nhật cart.item_number
+                cart.item_number -= sub_cart_item.quantity
+
+                # Xóa SubCartItem
+                sub_cart_item.delete()
+
+                # Nếu sub_cart không còn item nào thì xóa
+                if not sub_cart.sub_cart_items.exists():
+                    sub_cart.delete()
+
+            # Sau vòng lặp, nếu cart không còn sub_cart nào thì xóa luôn cart
+            if not cart.sub_carts.exists():
+                cart.delete()
+            else:
+                cart.save()
+
+            return Response({"message": "Xóa SubCartItem thành công!"}, status=status.HTTP_200_OK)
+
+        return Response({"error": "Danh sách ID rỗng!"}, status=status.HTTP_400_BAD_REQUEST)
+
 
 class MenuViewSet(viewsets.ViewSet):
     def get_permissions(self):
@@ -914,14 +1030,14 @@ class AddItemToCart(APIView):
             print('sub cart item price: ', sub_cart_item.price)
             sub_cart_item.save()
 
-        total_price = sum(item.price for item in sub_cart.sub_cart_items.all())
-        total_quantity = sum(item.quantity for item in sub_cart.sub_cart_items.all())
-        sub_cart.total_price = total_price
-        sub_cart.total_quantity = total_quantity
+        # Update sub_cart
+        sub_cart.total_price = sum(item.price for item in sub_cart.sub_cart_items.all())
+        sub_cart.total_quantity = sum(item.quantity for item in sub_cart.sub_cart_items.all())
         sub_cart.save()
 
-        items_number = cart.sub_carts.all().count()
-        cart.items_number = items_number
+        # Update cart
+        cart.total_price = sum(sub.total_price for sub in cart.sub_carts.all())
+        cart.items_number = cart.sub_carts.count()
         cart.save()
 
         return Response({'message': 'Thêm thành công!', 'cart': CartSerializer(cart).data}
@@ -932,29 +1048,90 @@ class UpdateItemToSubCart(APIView):
     def patch(self, request, *args, **kwargs):
         sub_cart_item_id = int(request.data.get('sub_cart_item_id'))
         quantity = int(request.data.get('quantity'))
-        time_serve = request.data.get('time_serve', 'default_time')  # Thêm thông tin time_serve từ client
-
         sub_cart_item = get_object_or_404(SubCartItem, id=sub_cart_item_id)
 
-        food = sub_cart_item.food
-        # Lấy giá từ FoodPrice thay vì trực tiếp từ food
-        try:
-            food_price = FoodPrice.objects.get(food=food, time_serve=time_serve)
-            price = food_price.price
-        except FoodPrice.DoesNotExist:
-            return Response({"error": "Không tìm thấy giá cho món ăn tại thời gian phục vụ này."},
-                            status=status.HTTP_404_NOT_FOUND)
-
-        sub_cart = sub_cart_item.sub_cart
-
-        # Cập nhật số lượng và giá trị
+        # Cập nhật SubCartItem
         sub_cart_item.quantity += quantity
-        sub_cart_item.price = sub_cart_item.quantity * price
+        if sub_cart_item.quantity <= 0:
+            sub_cart_item.delete()
+        else:
+            sub_cart_item.save()
 
-        sub_cart.total_quantity += quantity
-        sub_cart.total_price += quantity * price
+        # Update sub_cart
+        sub_cart = sub_cart_item.sub_cart
+        sub_cart.total_price = sum(item.price for item in sub_cart.sub_cart_items.all())
+        sub_cart.total_quantity = sum(item.quantity for item in sub_cart.sub_cart_items.all())
+        if sub_cart.total_quantity <= 0:
+            sub_cart.delete()
+        else:
+            sub_cart.save()
 
-        sub_cart_item.save()
-        sub_cart.save()
+        # Update cart
+        cart = sub_cart.cart
+        cart.total_price = sum(sub.total_price for sub in cart.sub_carts.all())
+        cart.item_number = sum(sub.total_quantity for sub in cart.sub_carts.all())
+        if cart.item_number <= 0:
+            cart.delete()
+        else:
+            cart.save()
 
         return Response({"message": "Cập nhật thành công."}, status=status.HTTP_200_OK)
+
+class MomoPayment(APIView):
+    def post(self, request):
+        try:
+            # Các tham số MoMo
+            endpoint = "https://test-payment.momo.vn/v2/gateway/api/create"
+            partnerCode = "MOMO"
+            accessKey = "F8BBA842ECF85"
+            secretKey = "K951B6PE1waDMi640xX08PD3vg6EkVlz"
+            redirectUrl = "https://webhook.site/b3088a6a-2d17-4f8d-a383-71389a6c600b"
+            ipnUrl = "https://webhook.site/b3088a6a-2d17-4f8d-a383-71389a6c600b"
+
+            # Tham số từ người dùng
+            amount = str(request.data.get('amount'))
+            orderInfo = request.data.get('orderInfo', 'pay with MoMo')
+            order_id = request.data.get('order_id')  #Lấy order_id từ client
+            orderId = str(uuid.uuid4())
+            requestId = str(uuid.uuid4())
+            requestType = "captureWallet"
+            extraData = ""
+
+            # Tạo chữ ký
+            raw_signature = f"accessKey={accessKey}&amount={amount}&extraData={extraData}&ipnUrl={ipnUrl}" \
+                            f"&orderId={orderId}&orderInfo={orderInfo}&partnerCode={partnerCode}" \
+                            f"&redirectUrl={redirectUrl}&requestId={requestId}&requestType={requestType}"
+            h = hmac.new(bytes(secretKey, 'utf-8'), bytes(raw_signature, 'utf-8'), hashlib.sha256)
+            signature = h.hexdigest()
+
+            # Dữ liệu gửi đến MoMo
+            data = {
+                'partnerCode': partnerCode,
+                'partnerName': "Test",
+                'storeId': "MomoTestStore",
+                'requestId': requestId,
+                'amount': amount,
+                'orderId': orderId,
+                'orderInfo': orderInfo,
+                'redirectUrl': redirectUrl,
+                'ipnUrl': ipnUrl,
+                'lang': "vi",
+                'extraData': extraData,
+                'requestType': requestType,
+                'signature': signature
+            }
+
+            # Gửi yêu cầu đến MoMo
+            response = requests.post(endpoint, json=data, headers={'Content-Type': 'application/json'})
+            momo_response = response.json()
+
+            # Giả sử thanh toán thành công => cập nhật trạng thái thanh toán
+            if momo_response.get('resultCode') == 0:
+                payment = Payment.objects.get(order_id=order_id)
+                payment.status = 'SUCCESS'  # nhớ cập nhật field status trong model Payment
+                payment.save()
+
+            return Response(momo_response, status=response.status_code)
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

@@ -59,28 +59,6 @@ class RestaurantAddressSerializer(serializers.ModelSerializer):
         model = Restaurant
         fields = ['id', 'name', 'address']
 
-class SubCartItemSerializer(serializers.ModelSerializer):
-    food = serializers.StringRelatedField()  # Hiển thị tên món ăn
-    restaurant = serializers.StringRelatedField()  # Hiển thị tên nhà hàng
-
-    class Meta:
-        model = SubCartItem
-        fields = ['id', 'food', 'restaurant', 'sub_cart', 'quantity', 'price']
-
-class SubCartSerializer(serializers.ModelSerializer):
-    sub_cart_items = SubCartItemSerializer(many=True, read_only=True)
-    restaurant = serializers.StringRelatedField()  # Hiển thị tên nhà hàng
-
-    class Meta:
-        model = SubCart
-        fields = ['id', 'cart', 'restaurant', 'total_price', 'total_quantity', 'sub_cart_items']
-
-class CartSerializer(ModelSerializer):
-    user = UserSerializer()
-    class Meta:
-        model = Cart
-        fields = ['id', 'user', 'item_number', 'total_price']
-
 class MenuSerializer(serializers.ModelSerializer):
     foods = serializers.SerializerMethodField()
     restaurant = serializers.StringRelatedField()
@@ -184,3 +162,26 @@ class FavoriteSerializer(BaseSerializer):
     class Meta:
         model = Favorite
         fields = ['id', 'user', 'food', 'status']
+
+
+class SubCartItemSerializer(serializers.ModelSerializer):
+    food = FoodSerializers()
+    restaurant = serializers.StringRelatedField()  # Hiển thị tên nhà hàng
+
+    class Meta:
+        model = SubCartItem
+        fields = ['id', 'food', 'restaurant', 'sub_cart', 'quantity', 'price']
+
+class SubCartSerializer(serializers.ModelSerializer):
+    sub_cart_items = SubCartItemSerializer(many=True, read_only=True)
+    restaurant_name = serializers.CharField(source='restaurant.name', read_only=True)
+
+    class Meta:
+        model = SubCart
+        fields = ['id', 'cart', 'restaurant', 'restaurant_name', 'total_price', 'total_quantity', 'sub_cart_items']
+
+class CartSerializer(ModelSerializer):
+    user = UserSerializer()
+    class Meta:
+        model = Cart
+        fields = ['id', 'user', 'item_number', 'total_price']

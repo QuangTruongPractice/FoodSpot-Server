@@ -38,9 +38,6 @@ TIME_SERVE_CHOICES = [
     ('NIGHT', 'Night'),
 ]
 
-
-
-
 ROLE_CHOICES = [
     ('ADMIN', 'Admin'),
     ('CUSTOMER', 'Customer'),
@@ -107,6 +104,7 @@ class Restaurant(models.Model):
     star_rating = models.FloatField(default=0.0)
     address = models.ForeignKey('Address', on_delete=models.SET_NULL, null=True, blank=True, related_name='restaurants')
     tags = models.ManyToManyField('Tag', related_name='restaurants', blank=True)
+    shipping_fee_per_km = models.IntegerField(default=2000)
 
     def __str__(self):
         return self.name
@@ -152,6 +150,7 @@ class Order(models.Model):
     address = models.ForeignKey(Address, on_delete=models.CASCADE, related_name='orders')
     status = models.CharField(max_length=20, choices=ORDER_STATUS_CHOICES, default='PENDING')
     ordered_date = models.DateField(auto_now_add=True, null=True)
+    shipping_fee = models.FloatField(default=0)
 
     def __str__(self):
         return f"Order {self.id} by {self.user.email} at {self.restaurant.name}"
@@ -182,7 +181,6 @@ class Payment(models.Model):
     order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name='payments')
     payment_method = models.CharField(max_length=50)
     status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='FAIL')
-    amount = models.FloatField()
     total_payment = models.FloatField()
     created_date = models.DateField(auto_now_add=True)
 
@@ -324,7 +322,7 @@ class SubCartItem(models.Model):
 
     def save(self, *args, **kwargs):
         food_price = FoodPrice.objects.get(food=self.food, time_serve=self.time_serve).price
-        self.price = food_price
+        self.price = food_price * self.quantity
         super().save(*args, **kwargs)
 
     def __str__(self):

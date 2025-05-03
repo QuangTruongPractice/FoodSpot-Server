@@ -4,7 +4,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     RestaurantViewSet, UserViewSet, UserAddressViewSet,
     RestaurantAddressViewSet, SubCartViewSet, SubCartItemViewSet, MenuViewSet,
-    FollowViewSet, FavoriteViewSet, CartViewSet, AddItemToCart, UpdateItemToSubCart
+    FollowViewSet, FavoriteViewSet, CartViewSet, AddItemToCart, UpdateItemToSubCart, MomoPayment
 )
 
 router = DefaultRouter()
@@ -27,6 +27,7 @@ router.register(r'menus', MenuViewSet, basename='menu')
 
 urlpatterns = [
     path('', include(router.urls)),
-    path('add-to-cart/', views.AddItemToCart.as_view(), name='add-to-cart'),
+    path('add-to-cart/', AddItemToCart.as_view(), name='add-to-cart'),
     path('update-sub-cart-item/', UpdateItemToSubCart.as_view(), name='update-sub-cart-item'),
+    path('momo-payment/', MomoPayment.as_view(), name='momo-payment'),
 ]
