@@ -172,7 +172,7 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
         if self.action in ['list', 'retrieve']:
             permission_classes = [AllowAny]
         else:
-            permission_classes = [IsAuthenticated, IsRestaurantOwner]
+            permission_classes = [IsAuthenticated]
         return [permission() for permission in permission_classes]
 
     def get_queryset(self):
@@ -246,6 +246,17 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
         food = self.get_object(pk)
         food.delete()
         return Response({"message": "Món ăn đã bị xóa thành công."}, status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=['get'])
+    def reviews(self, request, pk=None):
+        """Lấy tất cả reviews của một món ăn."""
+        try:
+            food = Food.objects.get(pk=pk)
+            food_reviews = FoodReview.objects.filter(order_detail__food=food, parent=None)  # chỉ lấy review chính
+            serializer = FoodReviewSerializers(food_reviews, many=True)
+            return Response(serializer.data)
+        except Food.DoesNotExist:
+            return Response({"error": "Food not found"}, status=status.HTTP_404_NOT_FOUND)
 
 class FoodCategoryViewSet(viewsets.ModelViewSet):
     queryset = FoodCategory.objects.all()
@@ -464,6 +475,13 @@ class UserViewSet(viewsets.ViewSet):
         serializer = FavoriteSerializer(favorites, many=True)
         return Response(serializer.data)
 
+    @action(methods=['get'], detail=False, url_path='current-user/food-reviews')
+    def current_user_food_reviews(self, request):
+        user = request.user
+        reviews = FoodReview.objects.filter(user=user)
+        serializer = FoodReviewSerializers(reviews, many=True)
+        return Response(serializer.data)
+
 class UserAddressViewSet(viewsets.ViewSet):
     def get_permissions(self):
         """Yêu cầu xác thực cho tất cả các hành động."""
@@ -617,6 +635,18 @@ class RestaurantViewSet(viewsets.ViewSet):
             return Response(serializer.data)
         except Restaurant.DoesNotExist:
             return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=['get'])
+    def reviews(self, request, pk=None):
+        """Lấy tất cả restaurant reviews của nhà hàng."""
+        try:
+            restaurant = Restaurant.objects.get(pk=pk)
+            restaurant_reviews = RestaurantReview.objects.filter(restaurant=restaurant)
+            serializer = RestaurantReviewSerializer(restaurant_reviews, many=True)
+            return Response(serializer.data)
+        except Restaurant.DoesNotExist:
+            return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
+
 
 class RestaurantAddressViewSet(viewsets.ViewSet):
     def get_permissions(self):

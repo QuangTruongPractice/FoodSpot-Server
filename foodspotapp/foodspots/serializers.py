@@ -142,16 +142,27 @@ class OrderSerializer(BaseSerializer):
 
 class FoodReviewSerializers(BaseSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
+    avatar = serializers.SerializerMethodField()
     class Meta:
         model = FoodReview
-        fields = ['id', 'user', 'user_name', 'order_detail', 'comment', 'created_date', 'star']
+        fields = ['id', 'user', 'user_name', 'avatar', 'order_detail', 'comment', 'created_date', 'star', 'replies']
+
+    def get_replies(self, obj):
+        replies = FoodReview.objects.filter(parent=obj)
+        return FoodReviewSerializers(replies, many=True).data
+
+    def get_avatar(self, obj):
+        return obj.user.avatar.url if obj.user.avatar else None
 
 class RestaurantReviewSerializer(BaseSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
-    restaurant_name = serializers.CharField(source='restaurant.name', read_only=True)
+    avatar = serializers.SerializerMethodField()
     class Meta:
         model = RestaurantReview
-        fields = ['id', 'user', 'user_name', 'restaurant', 'restaurant_name','comment', 'created_date', 'star']
+        fields = ['id', 'user', 'user_name', 'avatar', 'restaurant', 'comment', 'created_date', 'star']
+
+    def get_avatar(self, obj):
+        return obj.user.avatar.url if obj.user.avatar else None
 
 class FollowSerializer(BaseSerializer):
     class Meta:

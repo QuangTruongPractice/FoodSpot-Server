@@ -20,7 +20,7 @@ class IsOrderOwner(permissions.BasePermission):
 class IsRestaurantOwner(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         # Kiểm tra nếu người dùng là chủ nhà hàng của món ăn (food)
-        return obj.restaurant.user == request.user  # `restaurant.user` là chủ nhà hàng
+        return obj.restaurant.owner == request.user  # `restaurant.user` là chủ nhà hàng
 
 class IsAdminUser(permissions.BasePermission):
     def has_permission(self, request, view):

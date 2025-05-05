@@ -1,7 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from cloudinary.models import CloudinaryField
-
+from django.core.exceptions import ValidationError
 
 ROLE_CHOICES = [
     ('ADMIN', 'Admin'),
@@ -256,12 +256,20 @@ class RestaurantReview(models.Model):
     def __str__(self):
         return f"Restaurant Review by {self.user.email} for {self.restaurant.name} (Star: {self.star})"
 
-    def save(self, *args, **kwargs):
+    def clean(self):
         if not Order.objects.filter(user=self.user, restaurant=self.restaurant).exists():
-            raise ValueError("Only users who have placed at least one order at this restaurant can review it.")
+            raise ValidationError("Only users who have placed at least one order at this restaurant can review it.")
         if not (0.0 <= float(self.star) <= 5.0):
-            raise ValueError("Star rating must be between 0.0 and 5.0.")
+            raise ValidationError("Star rating must be between 0.0 and 5.0.")
+
+    def save(self, *args, **kwargs):
+        self.clean()
         super().save(*args, **kwargs)
+        # Update restaurant star rating
+        reviews = RestaurantReview.objects.filter(restaurant=self.restaurant)
+        avg_rating = reviews.aggregate(models.Avg('star'))['star__avg'] or 0.0
+        self.restaurant.star_rating = round(avg_rating, 1)
+        self.restaurant.save()
 
 
 class FoodReview(models.Model):
@@ -291,6 +299,10 @@ class FoodReview(models.Model):
             if not (0.0 <= float(self.star) <= 5.0):
                 raise ValueError("Star rating must be between 0.0 and 5.0.")
         super().save(*args, **kwargs)
+
+        if not self.parent:
+            food = self.order_detail.food
+            food.update_star_rating()
 
 
 class Cart(models.Model):
