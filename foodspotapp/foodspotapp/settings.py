@@ -73,9 +73,7 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
-    ],
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 1,
+    ]
 }
 
 OAUTH2_PROVIDER = {
@@ -192,7 +190,7 @@ from cloudinary.utils import cloudinary_url
 cloudinary.config(
     cloud_name = "ddke8odpp",
     api_key = "967889279184172",
-    api_secret = "CLOUDINARY_URL=cloudinary://967889279184172:kSu8NtNakUyi5fwtUdcumtLRdA4@ddke8odpp", # Click 'View API Keys' above to copy your API secret
+    api_secret = "kSu8NtNakUyi5fwtUdcumtLRdA4", # Click 'View API Keys' above to copy your API secret
     secure=True
 )
 #Truong

@@ -47,6 +47,14 @@ customer = User.objects.create_user(
     username='khachhang1',
     role='CUSTOMER'
 )
+admin = User.objects.create_user(
+    email='admin123@@gmail.com',
+    password='123',
+    first_name='Nguyễn',
+    last_name='Văn A',
+    username='admin123',
+    role='ADMIN'
+)
 customer.addresses.add(address1, address2)
 print("Đã tạo CUSTOMER:", customer.email)
 

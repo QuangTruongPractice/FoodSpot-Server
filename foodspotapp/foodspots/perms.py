@@ -35,3 +35,7 @@ class IsOwnerOrAdmin(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         # Chỉ cho phép người dùng sở hữu đánh giá hoặc admin thao tác
         return obj.user == request.user or request.user.role == 'ADMIN'
+
+class IsOwner(permissions.BasePermission):
+    def has_object_permission(self, request, view, obj):
+        return obj.user == request.user

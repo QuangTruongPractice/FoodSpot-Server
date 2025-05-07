@@ -1,8 +1,8 @@
 from rest_framework.serializers import ModelSerializer
 from rest_framework.fields import SerializerMethodField
-from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, FoodPrice
 from rest_framework import serializers
-from .models import User, Address, Restaurant, SubCart, SubCartItem, Menu
+from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, FoodPrice, Follow, Favorite, User, Address, Restaurant, SubCart, SubCartItem, Menu
+from cloudinary.uploader import upload
 
 class BaseSerializer(ModelSerializer):
     image = SerializerMethodField()
@@ -12,10 +12,30 @@ class BaseSerializer(ModelSerializer):
             return obj.image.url
         return None
 
-class UserSerializer(serializers.ModelSerializer):
+    def create(self, validated_data):
+        image_file = self.context.get('request').FILES.get('image')
+        if image_file:
+            try:
+                upload_result = upload(image_file)
+                validated_data['image'] = upload_result['url']  # Lưu URL từ Cloudinary
+            except Exception as e:
+                raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        image_file = self.context.get('request').FILES.get('image')
+        if image_file:
+            try:
+                upload_result = upload(image_file)
+                validated_data['image'] = upload_result['url']
+            except Exception as e:
+                raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
+        return super().update(instance, validated_data)
+
+class UserSerializer(BaseSerializer):
     class Meta:
         model = User
-        fields = ['username', 'email', 'first_name', 'last_name', 'phone_number', 'role', 'password']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone_number', 'role', 'password', 'avatar']
         extra_kwargs = {
             'password': {'write_only': True},
             'role': {'required': False},
@@ -32,83 +52,117 @@ class UserSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Username is required")
         return value
 
-class AddressSerializer(serializers.ModelSerializer):
+class AddressSerializer(BaseSerializer):  # Kế thừa BaseSerializer để xử lý image nếu cần
     class Meta:
         model = Address
         fields = ['id', 'name', 'latitude', 'longitude']
 
-class UserAddressSerializer(serializers.ModelSerializer):
+class UserAddressSerializer(BaseSerializer):
     addresses = AddressSerializer(many=True)
 
     class Meta:
         model = User
         fields = ['id', 'email', 'addresses']
 
-class RestaurantSerializer(serializers.ModelSerializer):
+class RestaurantSerializer(BaseSerializer):
     owner = UserSerializer(read_only=True)
     address = AddressSerializer()
 
     class Meta:
         model = Restaurant
-        fields = ['id', 'name', 'phone_number', 'owner', 'star_rating', 'address']
+        fields = ['id', 'name', 'avatar', 'phone_number', 'owner', 'star_rating', 'shipping_fee_per_km', 'address']
 
-class RestaurantAddressSerializer(serializers.ModelSerializer):
+class RestaurantAddressSerializer(BaseSerializer):
     address = AddressSerializer()
 
     class Meta:
         model = Restaurant
         fields = ['id', 'name', 'address']
 
-class SubCartItemSerializer(serializers.ModelSerializer):
-    food = serializers.StringRelatedField()  # Hiển thị tên món ăn
-    restaurant = serializers.StringRelatedField()  # Hiển thị tên nhà hàng
+class SubCartItemSerializer(BaseSerializer):
+    food = serializers.SlugRelatedField(slug_field='name', read_only=True)  # Tối ưu hóa truy vấn
+    restaurant = serializers.SlugRelatedField(slug_field='name', read_only=True)
 
     class Meta:
         model = SubCartItem
         fields = ['id', 'food', 'restaurant', 'quantity', 'price']
 
-class SubCartSerializer(serializers.ModelSerializer):
+class SubCartSerializer(BaseSerializer):
     sub_cart_items = SubCartItemSerializer(many=True, read_only=True)
-    restaurant = serializers.StringRelatedField()  # Hiển thị tên nhà hàng
+    restaurant = serializers.SlugRelatedField(slug_field='name', read_only=True)
 
     class Meta:
         model = SubCart
         fields = ['id', 'cart', 'restaurant', 'total_price', 'sub_cart_items']
 
-class MenuSerializer(serializers.ModelSerializer):
-    foods = serializers.StringRelatedField(many=True)  # Hiển thị tên các món ăn
-    restaurant = serializers.StringRelatedField()  # Hiển thị tên nhà hàng
+class MenuSerializer(BaseSerializer):
+    foods = serializers.SerializerMethodField()
+    restaurant = serializers.SlugRelatedField(slug_field='name', read_only=True)
 
     class Meta:
         model = Menu
         fields = ['id', 'restaurant', 'name', 'description', 'time_serve', 'foods', 'is_active']
 
-class FoodCategorySerializer(ModelSerializer):
+    def get_foods(self, obj):
+        time_serve = obj.time_serve
+        # Lọc foods theo restaurant và time_serve
+        queryset = obj.foods.filter(
+            restaurant=obj.restaurant,
+            prices__time_serve=time_serve
+        ).distinct()
+
+        serializer = FoodInMenuSerializer(queryset, many=True, context={'time_serve': time_serve})
+        return serializer.data
+
+class FoodInMenuSerializer(BaseSerializer):
+    price = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Food
+        fields = ['id', 'name', 'image', 'description', 'price']
+
+    def get_price(self, obj):
+        time_serve = self.context.get('time_serve')
+        price_obj = obj.prices.filter(time_serve=time_serve).first()
+        return price_obj.price if price_obj else None
+
+class FoodCategorySerializer(BaseSerializer):
     class Meta:
         model = FoodCategory
         fields = ['id', 'name']
 
-class FoodPriceSerializer(serializers.ModelSerializer):
+class FoodPriceSerializer(BaseSerializer):
     class Meta:
         model = FoodPrice
         fields = ['time_serve', 'price']
 
 class FoodSerializers(BaseSerializer):
-    prices = FoodPriceSerializer(many=True, read_only=True)  # Lấy tất cả giá và thời gian phục vụ
+    prices = FoodPriceSerializer(many=True, read_only=True)
+    restaurant_name = serializers.CharField(source="restaurant.name", read_only=True)
 
     class Meta:
         model = Food
-        fields = ["id", "name", "restaurant", "image", "food_category", "prices", "description"]
+        fields = ["id", "name", "restaurant", "restaurant_name", "image", "food_category", "prices", "description"]
+        extra_kwargs = {
+            'name': {'required': True},
+            'restaurant': {'required': True},
+            'food_category': {'required': True},
+        }
+
+    def validate_name(self, value):
+        if not value:
+            raise serializers.ValidationError("Tên món ăn là bắt buộc")
+        return value
 
 class OrderDetailSerializer(BaseSerializer):
     food = serializers.SerializerMethodField()
+
     class Meta:
         model = OrderDetail
-        fields = ['id', 'food', 'order', 'time_serve','quantity', 'sub_total']
+        fields = ['id', 'food', 'order', 'time_serve', 'quantity', 'sub_total']
 
     def get_food(self, obj):
-        food_data = FoodSerializers(obj.food).data  # Lấy thông tin đầy đủ món ăn
-        # Lọc ra chỉ 1 price ứng với time_serve của OrderDetail hiện tại
+        food_data = FoodSerializers(obj.food).data
         matched_price = next(
             (price for price in food_data['prices'] if price['time_serve'] == obj.time_serve),
             None
@@ -121,8 +175,7 @@ class OrderSerializer(BaseSerializer):
 
     class Meta:
         model = Order
-        fields = ['id', 'user', 'restaurant', 'ordered_date', 'address',
-                  'total', 'status']
+        fields = ['id', 'user', 'restaurant', 'ordered_date', 'address', 'total', 'status']
         extra_kwargs = {
             'user': {'read_only': True},
             'ordered_date': {'read_only': True},
@@ -130,6 +183,7 @@ class OrderSerializer(BaseSerializer):
 
 class FoodReviewSerializers(BaseSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
+
     class Meta:
         model = FoodReview
         fields = ['id', 'user', 'user_name', 'order_detail', 'comment', 'created_date', 'star']
@@ -137,6 +191,17 @@ class FoodReviewSerializers(BaseSerializer):
 class RestaurantReviewSerializer(BaseSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
     restaurant_name = serializers.CharField(source='restaurant.name', read_only=True)
+
     class Meta:
         model = RestaurantReview
-        fields = ['id', 'user', 'user_name', 'restaurant', 'restaurant_name','comment', 'created_date', 'star']
+        fields = ['id', 'user', 'user_name', 'restaurant', 'restaurant_name', 'comment', 'created_date', 'star']
+
+class FollowSerializer(BaseSerializer):
+    class Meta:
+        model = Follow
+        fields = ['id', 'user', 'restaurant', 'status']
+
+class FavoriteSerializer(BaseSerializer):
+    class Meta:
+        model = Favorite
+        fields = ['id', 'user', 'food', 'status']

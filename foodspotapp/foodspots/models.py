@@ -14,6 +14,11 @@ FOLLOW_STATUS_CHOICES = [
     ('CANCEL', 'Cancel'),
 ]
 
+FAV_STATUS_CHOICES = [
+    ('FAVORITE', 'Favorite'),
+    ('CANCEL', 'Cancel'),
+]
+
 ORDER_STATUS_CHOICES = [
     ('PENDING', 'Pending'),
     ('ACCEPTED', 'Accepted'),
@@ -102,6 +107,7 @@ class Restaurant(models.Model):
     star_rating = models.FloatField(default=0.0)
     address = models.ForeignKey('Address', on_delete=models.SET_NULL, null=True, blank=True, related_name='restaurants')
     tags = models.ManyToManyField('Tag', related_name='restaurants', blank=True)
+    shipping_fee_per_km = models.IntegerField(default=2000)
 
     def __str__(self):
         return self.name
@@ -123,6 +129,22 @@ class Follow(models.Model):
             raise ValueError("Only users with role CUSTOMER can follow a restaurant.")
         super().save(*args, **kwargs)
 
+class Favorite(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fav_as_user')
+    food = models.ForeignKey('Food', on_delete=models.CASCADE, related_name='fav_as_food')
+    status = models.CharField(max_length=20, choices=FAV_STATUS_CHOICES, default='FAVORITE')
+
+    class Meta:
+        unique_together = ('user', 'food')
+
+    def __str__(self):
+        return f"{self.user.email} favorite {self.food.name} ({self.status})"
+
+    def save(self, *args, **kwargs):
+        if self.user.role != 'CUSTOMER':
+            raise ValueError("Only users with role CUSTOMER can add favorite a food.")
+        super().save(*args, **kwargs)
+
 
 class Order(models.Model):
     total = models.FloatField(default=0.0)
@@ -130,6 +152,8 @@ class Order(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders')
     address = models.ForeignKey(Address, on_delete=models.CASCADE, related_name='orders')
     status = models.CharField(max_length=20, choices=ORDER_STATUS_CHOICES, default='PENDING')
+    ordered_date = models.DateField(auto_now_add=True, null=True)
+    shipping_fee = models.FloatField(default=0)
 
     def __str__(self):
         return f"Order {self.id} by {self.user.email} at {self.restaurant.name}"
@@ -182,7 +206,7 @@ class Food(models.Model):
     is_available = models.BooleanField(default=True)
     star_rating = models.FloatField(default=0.0)
     food_category = models.ForeignKey(FoodCategory, on_delete=models.CASCADE, related_name='foods')
-    restaurant = models.ForeignKey('Restaurant', on_delete=models.CASCADE, related_name='foods')
+    restaurant = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name='foods')
 
     def update_star_rating(self):
         reviews = FoodReview.objects.filter(order_detail__food=self, parent=None)

@@ -2,13 +2,14 @@ from allauth.headless.base.views import APIView
 from django.http import HttpResponse
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
-from rest_framework import viewsets, permissions, status, generics
+from rest_framework import viewsets, permissions, status, generics, mixins
 from rest_framework.decorators import action, api_view
-from .perms import IsAdminUser, IsOrderOwner, IsOwnerOrAdmin, IsRestaurantOwner
-from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, Restaurant, FoodPrice
+from .perms import IsAdminUser, IsOrderOwner, IsOwnerOrAdmin, IsRestaurantOwner, IsOwner
+from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, Restaurant, FoodPrice, Follow, Favorite
 from .serializers import (OrderSerializer, OrderDetailSerializer, FoodSerializers,
-                          FoodCategorySerializer, FoodReviewSerializers, RestaurantReviewSerializer, FoodPriceSerializer)
-
+                          FoodCategorySerializer, FoodReviewSerializers, RestaurantReviewSerializer,
+                          FoodPriceSerializer, FollowSerializer, FavoriteSerializer)
+from django.db.models import Q
 
 def index(request):
     return HttpResponse("foodspots")
@@ -105,55 +106,67 @@ class FoodPriceViewSet(viewsets.ModelViewSet):
         self.perform_update(serializer)
         return Response(serializer.data)
 
-class FoodViewSet(viewsets.ViewSet):
+class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIView):
+    serializer_class = FoodSerializers
+    # Phân quyền cho các phương thức
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
-            permission_classes = [AllowAny]  # Công khai cho list và retrieve
+            permission_classes = [AllowAny]
         else:
-            permission_classes = [IsAuthenticated, IsRestaurantOwner]  # Yêu cầu xác thực cho create, update, delete
+            permission_classes = [IsAuthenticated, IsRestaurantOwner]
         return [permission() for permission in permission_classes]
 
     def get_queryset(self):
-        return Food.objects.prefetch_related('menus__restaurant').all()
+        queryset = Food.objects.prefetch_related('menus__restaurant').all()
 
-    def get_object(self, pk):
-        queryset = self.get_queryset()
-        return get_object_or_404(queryset, pk=pk)
-
-    def list(self, request):
-        queryset = self.get_queryset()
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search) |
+                Q(menus__restaurant__name__icontains=search)
+            ).distinct()
 
         # Lọc theo tên món ăn
-        name = request.query_params.get('name')
+        name = self.request.query_params.get('name')
         if name:
             queryset = queryset.filter(name__icontains=name)
 
         # Lọc theo giá
-        price_min = request.query_params.get('price_min')
-        if price_min:
-            queryset = queryset.filter(price__gte=price_min)
+        price_min = self.request.query_params.get('price_min')
+        price_max = self.request.query_params.get('price_max')
 
-        price_max = request.query_params.get('price_max')
-        if price_max:
-            queryset = queryset.filter(price__lte=price_max)
+        if price_min or price_max:
+            # Lọc theo giá trong bảng FoodPrice
+            food_prices = FoodPrice.objects.all()
+
+            if price_min:
+                food_prices = food_prices.filter(price__gte=price_min)
+
+            if price_max:
+                food_prices = food_prices.filter(price__lte=price_max)
+
+            # Lọc các món ăn có giá thỏa mãn
+            queryset = queryset.filter(id__in=food_prices.values('food_id')).distinct()
 
         # Lọc theo danh mục
-        food_category = request.query_params.get('food_category')
+        food_category = self.request.query_params.get('food_category')
         if food_category:
             queryset = queryset.filter(food_category__name__icontains=food_category)
 
+        category_id = self.request.query_params.get('category_id')
+        if category_id:
+            queryset = queryset.filter(food_category_id=category_id)
+
+        restaurant_id = self.request.query_params.get('restaurant_id')
+        if restaurant_id:
+            queryset = queryset.filter(menus__restaurant_id=restaurant_id)
+
         # Lọc theo tên nhà hàng
-        restaurant_name = request.query_params.get('restaurant_name')
+        restaurant_name = self.request.query_params.get('restaurant_name')
         if restaurant_name:
             queryset = queryset.filter(menus__restaurant__name__icontains=restaurant_name)
 
-        serializer = FoodSerializers(queryset, many=True)
-        return Response(serializer.data)
-
-    def retrieve(self, request, pk=None):
-        food = self.get_object(pk)
-        serializer = FoodSerializers(food)
-        return Response(serializer.data)
+        return queryset
 
     def create(self, request):
         serializer = FoodSerializers(data=request.data)
@@ -176,16 +189,20 @@ class FoodViewSet(viewsets.ViewSet):
         return Response({"message": "Món ăn đã bị xóa thành công."}, status=status.HTTP_204_NO_CONTENT)
 
 class FoodCategoryViewSet(viewsets.ModelViewSet):
-    queryset = FoodCategory.objects.all().order_by('id')  # Sắp xếp theo id
+    queryset = FoodCategory.objects.all()
     serializer_class = FoodCategorySerializer
 
     def get_permissions(self):
-        if self.action == 'list':
+        if self.action == 'list':  # Chỉ phương thức list mới được phép cho phép mọi người
             return [permissions.AllowAny()]
-        return [permissions.IsAuthenticated(), IsAdminUser()]
+        # Các phương thức khác chỉ cho phép Admin
+        return [permissions.IsAuthenticated(), IsAdminUser()]  # Admin mới có thể thao tác POST, PATCH, DELETE
 
     def partial_update(self, request, *args, **kwargs):
+        """Cập nhật một food category, chỉ cho phép cập nhật tên."""
         instance = self.get_object()
+
+        # Chỉ cho phép cập nhật tên (name), không cho phép thay đổi các trường khác
         data = request.data
         if 'name' not in data:
             return Response(
@@ -195,6 +212,7 @@ class FoodCategoryViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
+
         return Response(serializer.data)
 
 
@@ -267,14 +285,6 @@ from rest_framework import status
 from rest_framework.decorators import action
 from .models import User
 from .serializers import UserSerializer
-
-from rest_framework import viewsets, status
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework.decorators import action
-from .models import User
-from .serializers import UserSerializer
-from django.db import IntegrityError
 
 from rest_framework import viewsets, status
 from rest_framework.permissions import IsAuthenticated
@@ -382,6 +392,20 @@ class UserViewSet(viewsets.ViewSet):
         print("Serializer errors:", serializer.errors)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(methods=['get'], detail=False, url_path='current-user/follow')
+    def current_user_followed_restaurants(self, request):
+        user = request.user
+        follows = Follow.objects.filter(user=user)
+        serializer = FollowSerializer(follows, many=True)
+        return Response(serializer.data)
+
+    @action(methods=['get'], detail=False, url_path='current-user/favorite')
+    def current_user_favorite_restaurants(self, request):
+        user = request.user
+        favorites = Favorite.objects.filter(user=user)
+        serializer = FavoriteSerializer(favorites, many=True)
+        return Response(serializer.data)
+
 class UserAddressViewSet(viewsets.ViewSet):
     def get_permissions(self):
         """Yêu cầu xác thực cho tất cả các hành động."""
@@ -458,11 +482,11 @@ class UserAddressViewSet(viewsets.ViewSet):
 
 class RestaurantViewSet(viewsets.ViewSet):
     def get_permissions(self):
-        # Công khai để xem danh sách và chi tiết
-        if self.action in ['list', 'retrieve']:
-            return [AllowAny()]
-        # Yêu cầu đăng nhập và quyền RestaurantOwner để tạo, chỉnh sửa
-        return [IsAuthenticated(), RestaurantOwner()]
+        # Kiểm tra các action (hành động) cần quyền RestaurantOwner (thêm, chỉnh sửa, xóa)
+        if self.action in ['create', 'update', 'destroy']:
+            return [IsAuthenticated(), RestaurantOwner()]
+        # Các action còn lại (list, retrieve) công khai
+        return [AllowAny()]
 
     def list(self, request):
         """Lấy danh sách nhà hàng (công khai)."""
@@ -504,6 +528,19 @@ class RestaurantViewSet(viewsets.ViewSet):
         except Restaurant.DoesNotExist:
             return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
 
+    def partial_update(self, request, pk=None):
+        """Cập nhật một phần nhà hàng (chỉ RESTAURANT_USER và là owner)."""
+        try:
+            restaurant = Restaurant.objects.get(pk=pk)
+            self.check_object_permissions(request, restaurant)  # Kiểm tra quyền
+            serializer = RestaurantSerializer(restaurant, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Restaurant.DoesNotExist:
+            return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
+
     def destroy(self, request, pk=None):
         """Xóa nhà hàng (chỉ RESTAURANT_USER và là owner)."""
         try:
@@ -511,6 +548,28 @@ class RestaurantViewSet(viewsets.ViewSet):
             self.check_object_permissions(request, restaurant)  # Kiểm tra quyền
             restaurant.delete()
             return Response({"message": "Restaurant deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+        except Restaurant.DoesNotExist:
+            return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=['get'])
+    def menus(self, request, pk=None):
+        """Lấy tất cả menus của nhà hàng."""
+        try:
+            restaurant = Restaurant.objects.get(pk=pk)
+            menus = Menu.objects.filter(restaurant=restaurant)  # Lọc các menu của nhà hàng
+            serializer = MenuSerializer(menus, many=True)
+            return Response(serializer.data)
+        except Restaurant.DoesNotExist:
+            return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=['get'])
+    def foods(self, request, pk=None):
+        """Lấy tất cả món ăn của nhà hàng."""
+        try:
+            restaurant = Restaurant.objects.get(pk=pk)
+            foods = Food.objects.filter(restaurant=restaurant)  # Lọc các món ăn của nhà hàng
+            serializer = FoodSerializers(foods, many=True)
+            return Response(serializer.data)
         except Restaurant.DoesNotExist:
             return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -728,3 +787,31 @@ class MenuViewSet(viewsets.ViewSet):
             return Response({"message": "Menu deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
         except Menu.DoesNotExist:
             return Response({"error": "Menu not found"}, status=status.HTTP_404_NOT_FOUND)
+
+class FollowViewSet(mixins.ListModelMixin,
+                    mixins.UpdateModelMixin,
+                    mixins.CreateModelMixin,
+                    viewsets.GenericViewSet):
+    queryset = Follow.objects.all()
+    serializer_class = FollowSerializer
+
+    def get_permissions(self):
+        if self.action == 'list':  # GET
+            return [IsAdminUser()]  # Chỉ Admin mới được xem toàn bộ follow
+        elif self.action == 'partial_update':
+            return [permissions.IsAuthenticated(), IsOwner()]  # Chỉ user đã tạo follow được phép chỉnh sửa
+        return super().get_permissions()
+
+class FavoriteViewSet(mixins.ListModelMixin,
+                      mixins.UpdateModelMixin,
+                      mixins.CreateModelMixin,
+                      viewsets.GenericViewSet):
+    queryset = Favorite.objects.all()
+    serializer_class = FavoriteSerializer
+
+    def get_permissions(self):
+        if self.action == 'list':  # GET
+            return [IsAdminUser()]  # Chỉ Admin mới được xem toàn bộ follow
+        elif self.action == 'partial_update':  # PATCH
+            return [permissions.IsAuthenticated(), IsOwner()]  # Chỉ user đã tạo follow được phép chỉnh sửa
+        return super().get_permissions()
