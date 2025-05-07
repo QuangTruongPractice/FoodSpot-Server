@@ -1,22 +1,38 @@
-from rest_framework.views import APIView
 from django.http import HttpResponse
-from rest_framework.exceptions import ValidationError
-from rest_framework.response import Response
-from rest_framework import viewsets, permissions, status, generics, mixins
-from rest_framework.decorators import action, api_view
-from .perms import IsAdminUser, IsOrderOwner, IsOwnerOrAdmin, IsRestaurantOwner, IsOwner
-from .models import (Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, Restaurant,
-                     FoodPrice, Follow, Favorite, Cart, SubCart, SubCartItem, Payment)
-from .serializers import (OrderSerializer, OrderDetailSerializer, FoodSerializers,
-                          FoodCategorySerializer, FoodReviewSerializers, RestaurantReviewSerializer,
-                          FoodPriceSerializer, FollowSerializer, FavoriteSerializer, CartSerializer,
-                          SubCartSerializer, SubCartItemSerializer)
+from django.shortcuts import get_object_or_404
+from django.db import transaction, IntegrityError
 from django.db.models import Q
-from django.db import transaction
-import uuid
-import hmac
-import hashlib
-import requests
+
+from rest_framework import viewsets, generics, mixins, status, permissions
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
+
+import uuid, hmac, hashlib, requests
+
+from rest_framework.permissions import IsAuthenticated, AllowAny
+
+from .models import (
+    Order, OrderDetail, Food, FoodCategory, FoodReview,
+    RestaurantReview, Restaurant, FoodPrice, Follow,
+    Favorite, Cart, SubCart, SubCartItem, Payment,
+    User, Address, Menu
+)
+
+from .serializers import (
+    OrderSerializer, OrderDetailSerializer, FoodSerializers, FoodCategorySerializer,
+    FoodReviewSerializers, RestaurantReviewSerializer, FoodPriceSerializer,
+    FollowSerializer, FavoriteSerializer, CartSerializer,
+    SubCartSerializer, SubCartItemSerializer, UserSerializer,
+    RestaurantSerializer, RestaurantAddressSerializer, AddressSerializer, UserAddressSerializer, MenuSerializer
+)
+
+from .perms import (
+    IsAdminUser, IsOrderOwner, IsOwnerOrAdmin,
+    IsRestaurantOwner, IsOwner, RestaurantOwner
+)
+
 
 def index(request):
     return HttpResponse("foodspots")
@@ -169,11 +185,10 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
     serializer_class = FoodSerializers
     # Phân quyền cho các phương thức
     def get_permissions(self):
-        if self.action in ['list', 'retrieve']:
-            permission_classes = [AllowAny]
-        else:
-            permission_classes = [IsAuthenticated]
-        return [permission() for permission in permission_classes]
+        # Kiểm tra các action (hành động) cần quyền RestaurantOwner (thêm, chỉnh sửa, xóa)
+        if self.action in ['create', 'update', 'destroy']:
+            return [IsAuthenticated(), IsRestaurantOwner()]
+        return [AllowAny()]
 
     def get_queryset(self):
         queryset = Food.objects.prefetch_related('menus__restaurant').all()
@@ -332,36 +347,6 @@ class RestaurantReviewViewSet(BaseReviewUpdateMixin, viewsets.ViewSet,
     serializer_class = RestaurantReviewSerializer
     review_model = RestaurantReview
     review_serializer = RestaurantReviewSerializer
-
-# foodspots/views.py
-from rest_framework import viewsets, status
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework.decorators import action
-from django.shortcuts import get_object_or_404
-from .models import User, Address, Restaurant, SubCart, SubCartItem, Menu
-from .serializers import (
-    UserSerializer, UserAddressSerializer, RestaurantSerializer,
-    RestaurantAddressSerializer, SubCartSerializer, SubCartItemSerializer,
-    MenuSerializer, AddressSerializer
-)
-from .perms import RestaurantOwner
-
-from rest_framework import viewsets
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.decorators import action
-from .models import User
-from .serializers import UserSerializer
-
-from rest_framework import viewsets, status
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework.decorators import action
-from .models import User
-from .serializers import UserSerializer
-from django.db import IntegrityError
 
 class UserViewSet(viewsets.ViewSet):
     def get_permissions(self):
@@ -593,6 +578,19 @@ class RestaurantViewSet(viewsets.ViewSet):
 
     def update(self, request, pk=None):
         """Cập nhật nhà hàng (chỉ RESTAURANT_USER và là owner)."""
+        try:
+            restaurant = Restaurant.objects.get(pk=pk)
+            self.check_object_permissions(request, restaurant)  # Kiểm tra quyền
+            serializer = RestaurantSerializer(restaurant, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Restaurant.DoesNotExist:
+            return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    def partial_update(self, request, pk=None):
+        """Cập nhật một phần nhà hàng (chỉ RESTAURANT_USER và là owner)."""
         try:
             restaurant = Restaurant.objects.get(pk=pk)
             self.check_object_permissions(request, restaurant)  # Kiểm tra quyền
