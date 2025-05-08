@@ -47,11 +47,27 @@ ROLE_CHOICES = [
     ('RESTAURANT_USER', 'Restaurant User'),
 ]
 
+# models.py
+from django.contrib.auth.models import AbstractUser, BaseUserManager
+from django.db import models
+from cloudinary.models import CloudinaryField
+
+ROLE_CHOICES = (
+    ('CUSTOMER', 'Customer'),
+    ('RESTAURANT_USER', 'Restaurant User'),
+    ('ADMIN', 'Admin'),
+)
+
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:
             raise ValueError('The Email field must be set')
         email = self.normalize_email(email)
+
+        # Đặt giá trị mặc định cho is_approved dựa trên role
+        role = extra_fields.get('role', 'CUSTOMER')
+        extra_fields.setdefault('is_approved', role != 'RESTAURANT_USER')  # Chỉ RESTAURANT_USER cần phê duyệt
+
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
@@ -60,6 +76,10 @@ class UserManager(BaseUserManager):
     def create_superuser(self, email, password=None, **extra_fields):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
+        extra_fields.setdefault('is_approved', True)
+        # Không gán role='ADMIN' cho superuser, để role rỗng hoặc một giá trị đặc biệt
+        extra_fields.setdefault('role', '')  # Superuser không thuộc ROLE_CHOICES
+
         if extra_fields.get('is_staff') is not True:
             raise ValueError('Superuser must have is_staff=True.')
         if extra_fields.get('is_superuser') is not True:
@@ -67,17 +87,17 @@ class UserManager(BaseUserManager):
         return self.create_user(email, password, **extra_fields)
 
 class User(AbstractUser):
-    # Các trường mặc định từ AbstractUser: username, first_name, last_name, email, password, is_staff, is_active, date_joined, is_superuser
-    email = models.EmailField(unique=True)  # Ghi đè để đảm bảo email là duy nhất
+    email = models.EmailField(unique=True)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     avatar = CloudinaryField(null=True)
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES)
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, blank=True, default='')  # Cho phép role rỗng
     addresses = models.ManyToManyField('Address', related_name='users', blank=True)
+    is_approved = models.BooleanField(default=True)  # Mặc định là True, trừ RESTAURANT_USER
 
     objects = UserManager()
 
-    USERNAME_FIELD = 'email'  # Sử dụng email thay vì username để đăng nhập
-    REQUIRED_FIELDS = ['first_name', 'last_name']  # Các trường bắt buộc khi tạo superuser
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = ['first_name', 'last_name']
 
     def __str__(self):
         return self.email

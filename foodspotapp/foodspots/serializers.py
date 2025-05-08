@@ -35,7 +35,8 @@ class BaseSerializer(ModelSerializer):
 class UserSerializer(BaseSerializer):
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone_number', 'role', 'password', 'avatar']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone_number',
+                  'role', 'password', 'avatar', 'is_approved']
         extra_kwargs = {
             'password': {'write_only': True},
             'role': {'required': False},
@@ -137,22 +138,12 @@ class FoodPriceSerializer(BaseSerializer):
         fields = ['time_serve', 'price']
 
 class FoodSerializers(BaseSerializer):
-    prices = FoodPriceSerializer(many=True, read_only=True)
+    prices = FoodPriceSerializer(many=True, read_only=True)  # Lấy tất cả giá và thời gian phục vụ
     restaurant_name = serializers.CharField(source="restaurant.name", read_only=True)
-
     class Meta:
         model = Food
-        fields = ["id", "name", "restaurant", "restaurant_name", "image", "food_category", "prices", "description"]
-        extra_kwargs = {
-            'name': {'required': True},
-            'restaurant': {'required': True},
-            'food_category': {'required': True},
-        }
+        fields = ["id", "name", "restaurant", "restaurant_name","image", "food_category", "prices", "description"]
 
-    def validate_name(self, value):
-        if not value:
-            raise serializers.ValidationError("Tên món ăn là bắt buộc")
-        return value
 
 class OrderDetailSerializer(BaseSerializer):
     food = serializers.SerializerMethodField()

@@ -73,7 +73,9 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
-    ]
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 4,
 }
 
 OAUTH2_PROVIDER = {
@@ -203,3 +205,10 @@ cloudinary.config(
 ALLOWED_HOSTS = ['*']
 client_id = "ly6xF1VvDFftDXCFUZtr3ZNNzLqcTUzv1uz7wmVO"
 client_secrec = "tVdL3xRmmzbdc1DrI4IP4SqxQAjo1uAa7BJ64l00jB5R3wZg06VPyNNwrYMHlblZFAiCnakzFQc8Pbwdov5n7g5lhuoFxbPLkMDlSmS94CM5mpbbTYzCJsYhRK7RkBMV"
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'nghianguyen.110616@@gmail.com'
+EMAIL_HOST_PASSWORD = ''

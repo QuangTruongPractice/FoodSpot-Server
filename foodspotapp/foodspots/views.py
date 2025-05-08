@@ -294,6 +294,15 @@ from .models import User
 from .serializers import UserSerializer
 from django.db import IntegrityError
 
+# views.py
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django.db import IntegrityError
+from .models import User, Follow, Favorite
+from .serializers import UserSerializer, FollowSerializer, FavoriteSerializer
+
 class UserViewSet(viewsets.ViewSet):
     def get_permissions(self):
         if self.action == 'register':
@@ -302,8 +311,9 @@ class UserViewSet(viewsets.ViewSet):
 
     def list(self, request):
         user = request.user
-        if user.role != 'ADMIN':
-            return Response({"error": "Only admins can view the user list."}, status=status.HTTP_403_FORBIDDEN)
+        # Cho phép cả superuser (role='') và ADMIN truy cập danh sách người dùng
+        if not (user.is_superuser or user.role == 'ADMIN'):
+            return Response({"error": "Only superusers or admins can view the user list."}, status=status.HTTP_403_FORBIDDEN)
 
         queryset = User.objects.all()
         serializer = UserSerializer(queryset, many=True)
@@ -316,7 +326,8 @@ class UserViewSet(viewsets.ViewSet):
         except User.DoesNotExist:
             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        if user.role != 'ADMIN' and user != target_user:
+        # Cho phép superuser, ADMIN, hoặc chính người dùng đó xem thông tin
+        if not (user.is_superuser or user.role == 'ADMIN' or user == target_user):
             return Response({"error": "You can only view your own details."}, status=status.HTTP_403_FORBIDDEN)
 
         serializer = UserSerializer(target_user)
@@ -324,8 +335,9 @@ class UserViewSet(viewsets.ViewSet):
 
     def create(self, request):
         user = request.user
-        if user.role != 'ADMIN':
-            return Response({"error": "Only admins can create new users."}, status=status.HTTP_403_FORBIDDEN)
+        # Chỉ superuser hoặc ADMIN có thể tạo người dùng mới
+        if not (user.is_superuser or user.role == 'ADMIN'):
+            return Response({"error": "Only superusers or admins can create new users."}, status=status.HTTP_403_FORBIDDEN)
 
         serializer = UserSerializer(data=request.data)
         if serializer.is_valid():
@@ -344,53 +356,79 @@ class UserViewSet(viewsets.ViewSet):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         return Response(UserSerializer(user).data)
 
-    @action(methods=['post'], detail=False, url_path='register')
-    def register(self, request):
-        """Đăng ký người dùng mới (không yêu cầu đăng nhập)."""
-        print("Dữ liệu nhận được:", request.data)
+@action(methods=['post'], detail=False, url_path='register')
+def register(self, request):
+    """Đăng ký người dùng mới (không yêu cầu đăng nhập)."""
+    print("Dữ liệu nhận được:", request.data)
 
-        # Kiểm tra dữ liệu đầu vào
-        if 'username' not in request.data or not request.data['username']:
-            return Response({"error": "Username is required"}, status=status.HTTP_400_BAD_REQUEST)
+    # Sử dụng serializer để validate dữ liệu
+    serializer = UserSerializer(data=request.data)
+    if not serializer.is_valid():
+        print("Serializer errors:", serializer.errors)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        if 'password' not in request.data or not request.data['password']:
-            return Response({"error": "Password is required"}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        # Lấy dữ liệu đã validate
+        user_data = serializer.validated_data
+        role = user_data.get('role', 'CUSTOMER')  # Mặc định là CUSTOMER nếu không có role
+        if role not in ['CUSTOMER', 'RESTAURANT_USER']:
+            return Response({"error": "Invalid role"}, status=status.HTTP_400_BAD_REQUEST)
 
-        if 'email' not in request.data or not request.data['email']:
-            return Response({"error": "Email is required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Kiểm tra username và email có tồn tại trước không
-        username = request.data['username']
-        email = request.data['email']
-        if User.objects.filter(username=username).exists():
-            print(f"Username {username} already exists in the database.")
-            return Response({"error": "Username already exists"}, status=status.HTTP_400_BAD_REQUEST)
+        # Kiểm tra email đã tồn tại chưa
+        email = user_data['email']
         if User.objects.filter(email=email).exists():
             print(f"Email {email} already exists in the database.")
             return Response({"error": "Email already exists"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Sử dụng serializer để kiểm tra dữ liệu
-        serializer = UserSerializer(data=request.data)
-        if serializer.is_valid():
-            try:
-                user_data = serializer.validated_data
-                user_data['role'] = 'CUSTOMER'
-                user = User(**user_data)
-                user.set_password(request.data['password'])
-                user.save()
-                response_data = UserSerializer(user).data
-                print("Đăng ký thành công:", response_data)
-                return Response(response_data, status=status.HTTP_201_CREATED)
-            except IntegrityError as e:
-                error_message = str(e).lower()
-                print(f"IntegrityError occurred: {error_message}")
-                if 'username' in error_message:
-                    return Response({"error": "Username already exists"}, status=status.HTTP_400_BAD_REQUEST)
-                if 'email' in error_message:
-                    return Response({"error": "Email already exists"}, status=status.HTTP_400_BAD_REQUEST)
-                return Response({"error": f"An error occurred while saving the user: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
-        print("Serializer errors:", serializer.errors)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        # Tạo username duy nhất từ email
+        base_username = email.split('@')[0]
+        username = base_username
+        counter = 1
+        while User.objects.filter(username=username).exists():
+            username = f"{base_username}{counter}"
+            counter += 1
+        user_data['username'] = username
+
+        # Đặt is_approved dựa trên role
+        user_data['is_approved'] = (role != 'RESTAURANT_USER')
+
+        # Lưu password
+        password = request.data.get('password')
+        if not password:
+            return Response({"error": "Password is required"}, status=status.HTTP_400_BAD_REQUEST)
+        user_data.pop('password', None)  # Loại bỏ password khỏi user_data để set_password sau
+
+        # Tạo user
+        user = User(**user_data)
+        user.set_password(password)
+        user.save()
+
+        # Nếu là RESTAURANT_USER, tạo Restaurant
+        if role == 'RESTAURANT_USER':
+            restaurant_name = request.data.get('restaurant_name')
+            if not restaurant_name:
+                user.delete()  # Xóa user nếu không có restaurant_name
+                return Response({"error": "Tên nhà hàng là bắt buộc cho RESTAURANT_USER!"}, status=status.HTTP_400_BAD_REQUEST)
+            Restaurant.objects.create(name=restaurant_name, owner=user, is_approved=False)
+            response_message = "Tài khoản nhà hàng đã được tạo. Vui lòng chờ Admin phê duyệt."
+        else:
+            response_message = "Đăng ký thành công!"
+
+        response_data = UserSerializer(user).data
+        response_data['message'] = response_message
+        print("Đăng ký thành công:", response_data)
+
+        return Response(response_data, status=status.HTTP_201_CREATED)
+
+    except IntegrityError as e:
+        error_message = str(e).lower()
+        print(f"IntegrityError occurred: {error_message}")
+        if 'email' in error_message or 'username' in error_message:
+            return Response({"error": "Email or username already exists"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": f"An error occurred while saving the user: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        return Response({"error": f"An unexpected error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
     @action(methods=['get'], detail=False, url_path='current-user/follow')
     def current_user_followed_restaurants(self, request):
