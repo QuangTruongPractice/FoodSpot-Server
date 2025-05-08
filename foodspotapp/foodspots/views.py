@@ -187,6 +187,7 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
         food = self.get_object(pk)
         food.delete()
         return Response({"message": "Món ăn đã bị xóa thành công."}, status=status.HTTP_204_NO_CONTENT)
+        return Response({"message": "Món ăn đã bị xóa thành công."}, status=status.HTTP_204_NO_CONTENT)
 
 class FoodCategoryViewSet(viewsets.ModelViewSet):
     queryset = FoodCategory.objects.all()
@@ -356,78 +357,90 @@ class UserViewSet(viewsets.ViewSet):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         return Response(UserSerializer(user).data)
 
-@action(methods=['post'], detail=False, url_path='register')
-def register(self, request):
-    """Đăng ký người dùng mới (không yêu cầu đăng nhập)."""
-    print("Dữ liệu nhận được:", request.data)
 
-    # Sử dụng serializer để validate dữ liệu
-    serializer = UserSerializer(data=request.data)
-    if not serializer.is_valid():
-        print("Serializer errors:", serializer.errors)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    @action(methods=['post'], detail=False, url_path='register')
+    def register(self, request):
+        """Đăng ký người dùng mới (không yêu cầu đăng nhập)."""
+        print("Dữ liệu nhận được:", request.data)
 
-    try:
-        # Lấy dữ liệu đã validate
-        user_data = serializer.validated_data
-        role = user_data.get('role', 'CUSTOMER')  # Mặc định là CUSTOMER nếu không có role
-        if role not in ['CUSTOMER', 'RESTAURANT_USER']:
-            return Response({"error": "Invalid role"}, status=status.HTTP_400_BAD_REQUEST)
+        # Kiểm tra các trường bắt buộc
+        required_fields = ['email', 'password']
+        if request.data.get('role') == 'RESTAURANT_USER':
+            required_fields.append('restaurant_name')
 
-        # Kiểm tra email đã tồn tại chưa
-        email = user_data['email']
-        if User.objects.filter(email=email).exists():
-            print(f"Email {email} already exists in the database.")
-            return Response({"error": "Email already exists"}, status=status.HTTP_400_BAD_REQUEST)
+        for field in required_fields:
+            if not request.data.get(field):
+                return Response(
+                    {"error": f"Trường {field} là bắt buộc."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-        # Tạo username duy nhất từ email
-        base_username = email.split('@')[0]
-        username = base_username
-        counter = 1
-        while User.objects.filter(username=username).exists():
-            username = f"{base_username}{counter}"
-            counter += 1
-        user_data['username'] = username
+        # Sử dụng serializer để validate dữ liệu
+        serializer = UserSerializer(data=request.data)
+        if not serializer.is_valid():
+            print("Serializer errors:", serializer.errors)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        # Đặt is_approved dựa trên role
-        user_data['is_approved'] = (role != 'RESTAURANT_USER')
+        try:
+            # Lấy dữ liệu đã validate
+            user_data = serializer.validated_data
+            role = user_data.get('role', 'CUSTOMER')  # Mặc định là CUSTOMER
+            if role not in ['CUSTOMER', 'RESTAURANT_USER']:
+                return Response({"error": "Vai trò không hợp lệ. Chỉ chấp nhận CUSTOMER hoặc RESTAURANT_USER."},
+                                status=status.HTTP_400_BAD_REQUEST)
 
-        # Lưu password
-        password = request.data.get('password')
-        if not password:
-            return Response({"error": "Password is required"}, status=status.HTTP_400_BAD_REQUEST)
-        user_data.pop('password', None)  # Loại bỏ password khỏi user_data để set_password sau
+            # Kiểm tra email đã tồn tại
+            email = user_data['email']
+            if User.objects.filter(email=email).exists():
+                print(f"Email {email} đã tồn tại.")
+                return Response({"error": "Email đã được sử dụng."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Tạo user
-        user = User(**user_data)
-        user.set_password(password)
-        user.save()
+            # Tạo username duy nhất từ email
+            base_username = email.split('@')[0]
+            username = base_username
+            counter = 1
+            while User.objects.filter(username=username).exists():
+                username = f"{base_username}{counter}"
+                counter += 1
+            user_data['username'] = username
 
-        # Nếu là RESTAURANT_USER, tạo Restaurant
-        if role == 'RESTAURANT_USER':
-            restaurant_name = request.data.get('restaurant_name')
-            if not restaurant_name:
-                user.delete()  # Xóa user nếu không có restaurant_name
-                return Response({"error": "Tên nhà hàng là bắt buộc cho RESTAURANT_USER!"}, status=status.HTTP_400_BAD_REQUEST)
-            Restaurant.objects.create(name=restaurant_name, owner=user, is_approved=False)
-            response_message = "Tài khoản nhà hàng đã được tạo. Vui lòng chờ Admin phê duyệt."
-        else:
+            # Đặt is_approved dựa trên role
+            user_data['is_approved'] = (role != 'RESTAURANT_USER')
+
+            # Lưu password
+            password = request.data.get('password')
+            user_data.pop('password', None)  # Loại bỏ password khỏi user_data
+
+            # Tạo user
+            user = User(**user_data)
+            user.set_password(password)
+            user.save()
+
+            # Nếu là RESTAURANT_USER, tạo Restaurant
             response_message = "Đăng ký thành công!"
+            if role == 'RESTAURANT_USER':
+                restaurant_name = request.data.get('restaurant_name').strip()
+                if len(restaurant_name) < 3:
+                    user.delete()
+                    return Response({"error": "Tên nhà hàng phải có ít nhất 3 ký tự."},
+                                    status=status.HTTP_400_BAD_REQUEST)
+                Restaurant.objects.create(name=restaurant_name, owner=user, is_approved=False)
+                response_message = "Tài khoản nhà hàng đã được tạo. Vui lòng chờ Admin phê duyệt."
 
-        response_data = UserSerializer(user).data
-        response_data['message'] = response_message
-        print("Đăng ký thành công:", response_data)
+            response_data = UserSerializer(user).data
+            response_data['message'] = response_message
+            print("Đăng ký thành công:", response_data)
 
-        return Response(response_data, status=status.HTTP_201_CREATED)
+            return Response(response_data, status=status.HTTP_201_CREATED)
 
-    except IntegrityError as e:
-        error_message = str(e).lower()
-        print(f"IntegrityError occurred: {error_message}")
-        if 'email' in error_message or 'username' in error_message:
-            return Response({"error": "Email or username already exists"}, status=status.HTTP_400_BAD_REQUEST)
-        return Response({"error": f"An error occurred while saving the user: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
-    except Exception as e:
-        return Response({"error": f"An unexpected error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except IntegrityError as e:
+            error_message = str(e).lower()
+            print(f"IntegrityError occurred: {error_message}")
+            return Response({"error": "Email hoặc username đã tồn tại."}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            print(f"Unexpected error: {str(e)}")
+            return Response({"error": f"Đã xảy ra lỗi không mong muốn: {str(e)}"},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
     @action(methods=['get'], detail=False, url_path='current-user/follow')
