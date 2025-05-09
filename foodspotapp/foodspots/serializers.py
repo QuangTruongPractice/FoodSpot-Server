@@ -1,18 +1,13 @@
-from rest_framework.serializers import ModelSerializer
-from rest_framework.fields import SerializerMethodField
-from rest_framework import serializers
-from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, FoodPrice, Follow, Favorite, User, Address, Restaurant, SubCart, SubCartItem, Menu
-from cloudinary.uploader import upload
-
 from rest_framework import serializers
 from cloudinary.uploader import upload
 from rest_framework.serializers import ModelSerializer, SerializerMethodField
+from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, FoodPrice, Follow, Favorite, User, Address, Restaurant, SubCart, SubCartItem, Menu
 
 class BaseSerializer(ModelSerializer):
     image = SerializerMethodField()
 
     def get_image(self, obj):
-        if obj.image:  # CloudinaryField tự động tạo URL đầy đủ
+        if hasattr(obj, 'image') and obj.image:
             return obj.image.url
         return None
 
@@ -25,7 +20,7 @@ class BaseSerializer(ModelSerializer):
         if image_file:
             try:
                 upload_result = upload(image_file)
-                validated_data['image'] = upload_result['url']  # Lưu URL từ Cloudinary
+                validated_data['image'] = upload_result['url']
             except Exception as e:
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
         return super().create(validated_data)
@@ -43,6 +38,7 @@ class BaseSerializer(ModelSerializer):
             except Exception as e:
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
         return super().update(instance, validated_data)
+
 class UserSerializer(BaseSerializer):
     class Meta:
         model = User
@@ -64,7 +60,15 @@ class UserSerializer(BaseSerializer):
             raise serializers.ValidationError("Username is required")
         return value
 
-class AddressSerializer(BaseSerializer):  # Kế thừa BaseSerializer để xử lý image nếu cần
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.avatar:
+            data['avatar'] = instance.avatar.url
+        else:
+            data['avatar'] = None
+        return data
+
+class AddressSerializer(BaseSerializer):
     class Meta:
         model = Address
         fields = ['id', 'name', 'latitude', 'longitude']
@@ -84,6 +88,14 @@ class RestaurantSerializer(BaseSerializer):
         model = Restaurant
         fields = ['id', 'name', 'avatar', 'phone_number', 'owner', 'star_rating', 'shipping_fee_per_km', 'address']
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.avatar:
+            data['avatar'] = instance.avatar.url
+        else:
+            data['avatar'] = None
+        return data
+
 class RestaurantAddressSerializer(BaseSerializer):
     address = AddressSerializer()
 
@@ -92,7 +104,7 @@ class RestaurantAddressSerializer(BaseSerializer):
         fields = ['id', 'name', 'address']
 
 class SubCartItemSerializer(BaseSerializer):
-    food = serializers.SlugRelatedField(slug_field='name', read_only=True)  # Tối ưu hóa truy vấn
+    food = serializers.SlugRelatedField(slug_field='name', read_only=True)
     restaurant = serializers.SlugRelatedField(slug_field='name', read_only=True)
 
     class Meta:
@@ -117,12 +129,10 @@ class MenuSerializer(BaseSerializer):
 
     def get_foods(self, obj):
         time_serve = obj.time_serve
-        # Lọc foods theo restaurant và time_serve
         queryset = obj.foods.filter(
             restaurant=obj.restaurant,
             prices__time_serve=time_serve
         ).distinct()
-
         serializer = FoodInMenuSerializer(queryset, many=True, context={'time_serve': time_serve})
         return serializer.data
 
@@ -138,6 +148,14 @@ class FoodInMenuSerializer(BaseSerializer):
         price_obj = obj.prices.filter(time_serve=time_serve).first()
         return price_obj.price if price_obj else None
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.image:
+            data['image'] = instance.image.url
+        else:
+            data['image'] = None
+        return data
+
 class FoodCategorySerializer(BaseSerializer):
     class Meta:
         model = FoodCategory
@@ -149,12 +167,20 @@ class FoodPriceSerializer(BaseSerializer):
         fields = ['time_serve', 'price']
 
 class FoodSerializers(BaseSerializer):
-    prices = FoodPriceSerializer(many=True, read_only=True)  # Lấy tất cả giá và thời gian phục vụ
+    prices = FoodPriceSerializer(many=True, read_only=True)
     restaurant_name = serializers.CharField(source="restaurant.name", read_only=True)
+
     class Meta:
         model = Food
-        fields = ["id", "name", "restaurant", "restaurant_name","image", "food_category", "prices", "description"]
+        fields = ["id", "name", "restaurant", "restaurant_name", "image", "food_category", "prices", "description"]
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.image:
+            data['image'] = instance.image.url
+        else:
+            data['image'] = None
+        return data
 
 class OrderDetailSerializer(BaseSerializer):
     food = serializers.SerializerMethodField()
