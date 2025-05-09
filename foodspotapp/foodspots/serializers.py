@@ -4,6 +4,10 @@ from rest_framework import serializers
 from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, FoodPrice, Follow, Favorite, User, Address, Restaurant, SubCart, SubCartItem, Menu
 from cloudinary.uploader import upload
 
+from rest_framework import serializers
+from cloudinary.uploader import upload
+from rest_framework.serializers import ModelSerializer, SerializerMethodField
+
 class BaseSerializer(ModelSerializer):
     image = SerializerMethodField()
 
@@ -13,7 +17,11 @@ class BaseSerializer(ModelSerializer):
         return None
 
     def create(self, validated_data):
-        image_file = self.context.get('request').FILES.get('image')
+        request = self.context.get('request')
+        image_file = None
+        if request and hasattr(request, 'FILES'):
+            image_file = request.FILES.get('image')
+
         if image_file:
             try:
                 upload_result = upload(image_file)
@@ -23,7 +31,11 @@ class BaseSerializer(ModelSerializer):
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
-        image_file = self.context.get('request').FILES.get('image')
+        request = self.context.get('request')
+        image_file = None
+        if request and hasattr(request, 'FILES'):
+            image_file = request.FILES.get('image')
+
         if image_file:
             try:
                 upload_result = upload(image_file)
@@ -31,7 +43,6 @@ class BaseSerializer(ModelSerializer):
             except Exception as e:
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
         return super().update(instance, validated_data)
-
 class UserSerializer(BaseSerializer):
     class Meta:
         model = User
