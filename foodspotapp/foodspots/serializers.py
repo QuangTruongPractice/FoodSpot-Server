@@ -2,6 +2,10 @@ from rest_framework import serializers
 from cloudinary.uploader import upload
 from rest_framework.serializers import ModelSerializer, SerializerMethodField
 from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, FoodPrice, Follow, Favorite, User, Address, Restaurant, SubCart, SubCartItem, Menu
+from PIL import Image
+import io
+from django.core.files.base import ContentFile
+
 
 class BaseSerializer(ModelSerializer):
     image = SerializerMethodField()
@@ -25,6 +29,16 @@ class BaseSerializer(ModelSerializer):
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
         return super().create(validated_data)
 
+    def compress_image(image_file):
+        img = Image.open(image_file)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        output = io.BytesIO()
+        img.thumbnail((800, 800))  # Giảm kích thước ảnh
+        img.save(output, format='JPEG', quality=85)  # Nén chất lượng
+        output.seek(0)
+        return ContentFile(output.read(), name=image_file.name)
+
     def update(self, instance, validated_data):
         request = self.context.get('request')
         image_file = None
@@ -33,7 +47,12 @@ class BaseSerializer(ModelSerializer):
 
         if image_file:
             try:
-                upload_result = upload(image_file)
+                # Nén ảnh trước khi upload
+                compressed_image = compress_image(image_file)
+                start_time = time.time()
+                upload_result = upload(compressed_image)
+                end_time = time.time()
+                print(f"Cloudinary upload time: {end_time - start_time} seconds")
                 validated_data['image'] = upload_result['url']
             except Exception as e:
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
