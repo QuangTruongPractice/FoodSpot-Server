@@ -349,3 +349,4 @@ class SubCartItem(models.Model):
 
     def __str__(self):
         return f"SubCartItem {self.food.name} in SubCart {self.sub_cart.id}"
+

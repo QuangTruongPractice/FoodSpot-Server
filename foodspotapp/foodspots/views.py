@@ -1,15 +1,38 @@
-from allauth.headless.base.views import APIView
 from django.http import HttpResponse
-from rest_framework.exceptions import ValidationError
-from rest_framework.response import Response
-from rest_framework import viewsets, permissions, status, generics, mixins
-from rest_framework.decorators import action, api_view
-from .perms import IsAdminUser, IsOrderOwner, IsOwnerOrAdmin, IsRestaurantOwner, IsOwner
-from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, Restaurant, FoodPrice, Follow, Favorite
-from .serializers import (OrderSerializer, OrderDetailSerializer, FoodSerializers,
-                          FoodCategorySerializer, FoodReviewSerializers, RestaurantReviewSerializer,
-                          FoodPriceSerializer, FollowSerializer, FavoriteSerializer)
+from django.shortcuts import get_object_or_404
+from django.db import transaction, IntegrityError
 from django.db.models import Q
+
+from rest_framework import viewsets, generics, mixins, status, permissions
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
+
+import uuid, hmac, hashlib, requests
+
+from rest_framework.permissions import IsAuthenticated, AllowAny
+
+from .models import (
+    Order, OrderDetail, Food, FoodCategory, FoodReview,
+    RestaurantReview, Restaurant, FoodPrice, Follow,
+    Favorite, Cart, SubCart, SubCartItem, Payment,
+    User, Address, Menu
+)
+
+from .serializers import (
+    OrderSerializer, OrderDetailSerializer, FoodSerializers, FoodCategorySerializer,
+    FoodReviewSerializers, RestaurantReviewSerializer, FoodPriceSerializer,
+    FollowSerializer, FavoriteSerializer, CartSerializer,
+    SubCartSerializer, SubCartItemSerializer, UserSerializer,
+    RestaurantSerializer, RestaurantAddressSerializer, AddressSerializer, UserAddressSerializer, MenuSerializer
+)
+
+from .perms import (
+    IsAdminUser, IsOrderOwner, IsOwnerOrAdmin,
+    IsRestaurantOwner, IsOwner, RestaurantOwner
+)
+
 
 def index(request):
     return HttpResponse("foodspots")
@@ -84,6 +107,58 @@ class OrderViewSet(viewsets.ViewSet):
         order.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+    @action(methods=['post'], detail=False, url_path='checkout')
+    def checkout(self, request):
+        """
+        Xử lý quy trình đặt hàng hoàn chỉnh (gồm Order + Payment + OrderDetail).
+        Dành cho cả COD và MoMo.
+        """
+        # Lấy dữ liệu từ request.data
+        user = request.user
+        sub_cart_id = request.data.get("sub_cart_id")
+        payment_method = request.data.get("payment_method")
+        ship_fee = float(request.data.get('ship_fee'))
+        total = float(request.data.get('total_price'))  # da bao gom phi ship
+        ship_address_id = int(request.data.get("ship_address")) #dia chi nguoi dung
+
+        sub_cart = get_object_or_404(SubCart, id=sub_cart_id)
+        ship_address = get_object_or_404(Address, id=ship_address_id)
+        cart = sub_cart.cart
+        quantity = 0
+        try:
+            with transaction.atomic():
+                order = Order.objects.create(user=user,
+                                             restaurant=sub_cart.restaurant,
+                                             address=ship_address,
+                                             shipping_fee=ship_fee,
+                                             total=total,)
+
+                Payment.objects.create(order=order,
+                                       total_payment=total,
+                                       payment_method=payment_method,)
+
+                for s in sub_cart.sub_cart_items.all():
+                    OrderDetail.objects.create(food=s.food,
+                                               order=order,
+                                               quantity=s.quantity,
+                                               sub_total=s.price,
+                                               time_serve=s.time_serve)
+                    quantity += s.quantity
+
+                sub_cart.delete()
+                cart.item_number -= quantity
+
+                cart.save()
+                if cart.item_number == 0:
+                    cart.delete()
+
+                return Response({"message": "Đặt hàng thành công.",
+                                 "order_id": order.id}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class OrderDetailViewSet(viewsets.ModelViewSet):
     queryset = OrderDetail.objects.select_related(
         'food'
@@ -110,11 +185,10 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
     serializer_class = FoodSerializers
     # Phân quyền cho các phương thức
     def get_permissions(self):
-        if self.action in ['list', 'retrieve']:
-            permission_classes = [AllowAny]
-        else:
-            permission_classes = [IsAuthenticated, IsRestaurantOwner]
-        return [permission() for permission in permission_classes]
+        # Kiểm tra các action (hành động) cần quyền RestaurantOwner (thêm, chỉnh sửa, xóa)
+        if self.action in ['create', 'update', 'destroy']:
+            return [IsAuthenticated(), IsRestaurantOwner()]
+        return [AllowAny()]
 
     def get_queryset(self):
         queryset = Food.objects.prefetch_related('menus__restaurant').all()
@@ -187,7 +261,17 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
         food = self.get_object(pk)
         food.delete()
         return Response({"message": "Món ăn đã bị xóa thành công."}, status=status.HTTP_204_NO_CONTENT)
-        return Response({"message": "Món ăn đã bị xóa thành công."}, status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=['get'])
+    def reviews(self, request, pk=None):
+        """Lấy tất cả reviews của một món ăn."""
+        try:
+            food = Food.objects.get(pk=pk)
+            food_reviews = FoodReview.objects.filter(order_detail__food=food, parent=None)  # chỉ lấy review chính
+            serializer = FoodReviewSerializers(food_reviews, many=True)
+            return Response(serializer.data)
+        except Food.DoesNotExist:
+            return Response({"error": "Food not found"}, status=status.HTTP_404_NOT_FOUND)
 
 class FoodCategoryViewSet(viewsets.ModelViewSet):
     queryset = FoodCategory.objects.all()
@@ -265,48 +349,9 @@ class RestaurantReviewViewSet(BaseReviewUpdateMixin, viewsets.ViewSet,
     review_serializer = RestaurantReviewSerializer
 
 
-# foodspots/views.py
-from rest_framework import viewsets, status
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework.decorators import action
-from django.shortcuts import get_object_or_404
-from .models import User, Address, Restaurant, SubCart, SubCartItem, Menu
-from .serializers import (
-    UserSerializer, UserAddressSerializer, RestaurantSerializer,
-    RestaurantAddressSerializer, SubCartSerializer, SubCartItemSerializer,
-    MenuSerializer, AddressSerializer
-)
-from .perms import RestaurantOwner
-
-from rest_framework import viewsets
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.decorators import action
-from .models import User
-from .serializers import UserSerializer
-
-from rest_framework import viewsets, status
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework.decorators import action
-from .models import User
-from .serializers import UserSerializer
-from django.db import IntegrityError
-
-# views.py
-from rest_framework import viewsets, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from django.db import IntegrityError
-from .models import User, Follow, Favorite
-from .serializers import UserSerializer, FollowSerializer, FavoriteSerializer
-
 class UserViewSet(viewsets.ViewSet):
     def get_permissions(self):
-        if self.action == 'register':
+        if self.action in ['register_customer', 'register_restaurant']:
             return []
         return [IsAuthenticated()]
 
@@ -314,7 +359,8 @@ class UserViewSet(viewsets.ViewSet):
         user = request.user
         # Cho phép cả superuser (role='') và ADMIN truy cập danh sách người dùng
         if not (user.is_superuser or user.role == 'ADMIN'):
-            return Response({"error": "Only superusers or admins can view the user list."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"error": "Only superusers or admins can view the user list."},
+                            status=status.HTTP_403_FORBIDDEN)
 
         queryset = User.objects.all()
         serializer = UserSerializer(queryset, many=True)
@@ -334,18 +380,6 @@ class UserViewSet(viewsets.ViewSet):
         serializer = UserSerializer(target_user)
         return Response(serializer.data)
 
-    def create(self, request):
-        user = request.user
-        # Chỉ superuser hoặc ADMIN có thể tạo người dùng mới
-        if not (user.is_superuser or user.role == 'ADMIN'):
-            return Response({"error": "Only superusers or admins can create new users."}, status=status.HTTP_403_FORBIDDEN)
-
-        serializer = UserSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
     @action(methods=['get', 'patch'], detail=False, url_path='current-user')
     def get_current_user(self, request):
         user = request.user
@@ -357,17 +391,39 @@ class UserViewSet(viewsets.ViewSet):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         return Response(UserSerializer(user).data)
 
+    def _create_user(self, request, validated_data, role, password):
+        """Hàm hỗ trợ để tạo user và xử lý logic chung."""
+        # Kiểm tra email đã tồn tại
+        email = validated_data['email']
+        if User.objects.filter(email=email).exists():
+            print(f"Email {email} đã tồn tại.")
+            return None, Response({"error": "Email đã được sử dụng."}, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(methods=['post'], detail=False, url_path='register')
-    def register(self, request):
-        """Đăng ký người dùng mới (không yêu cầu đăng nhập)."""
-        print("Dữ liệu nhận được:", request.data)
+        # Tạo username duy nhất từ email
+        base_username = email.split('@')[0]
+        username = base_username
+        counter = 1
+        while User.objects.filter(username=username).exists():
+            username = f"{base_username}{counter}"
+            counter += 1
+        validated_data['username'] = username
 
-        # Kiểm tra các trường bắt buộc
+        # Đặt role và is_approved
+        validated_data['role'] = role
+        validated_data['is_approved'] = (role != 'RESTAURANT_USER')  # False cho RESTAURANT_USER, True cho CUSTOMER
+
+        # Tạo user
+        validated_data.pop('password', None)
+        user = User(**validated_data)
+        user.set_password(password)
+        user.save()
+        return user, None
+
+    @action(methods=['post'], detail=False, url_path='register-customer')
+    def register_customer(self, request):
+        """Đăng ký người dùng CUSTOMER."""
+        print("Dữ liệu nhận được (CUSTOMER):", request.data)
         required_fields = ['email', 'password']
-        if request.data.get('role') == 'RESTAURANT_USER':
-            required_fields.append('restaurant_name')
-
         for field in required_fields:
             if not request.data.get(field):
                 return Response(
@@ -375,73 +431,86 @@ class UserViewSet(viewsets.ViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-        # Sử dụng serializer để validate dữ liệu
-        serializer = UserSerializer(data=request.data)
+        serializer = UserSerializer(data=request.data, context={'request': request})
         if not serializer.is_valid():
             print("Serializer errors:", serializer.errors)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Lấy dữ liệu đã validate
-            user_data = serializer.validated_data
-            role = user_data.get('role', 'CUSTOMER')  # Mặc định là CUSTOMER
-            if role not in ['CUSTOMER', 'RESTAURANT_USER']:
-                return Response({"error": "Vai trò không hợp lệ. Chỉ chấp nhận CUSTOMER hoặc RESTAURANT_USER."},
-                                status=status.HTTP_400_BAD_REQUEST)
+            user, error_response = self._create_user(
+                request,
+                serializer.validated_data,
+                role='CUSTOMER',
+                password=request.data.get('password')
+            )
+            if error_response:
+                return error_response
 
-            # Kiểm tra email đã tồn tại
-            email = user_data['email']
-            if User.objects.filter(email=email).exists():
-                print(f"Email {email} đã tồn tại.")
-                return Response({"error": "Email đã được sử dụng."}, status=status.HTTP_400_BAD_REQUEST)
-
-            # Tạo username duy nhất từ email
-            base_username = email.split('@')[0]
-            username = base_username
-            counter = 1
-            while User.objects.filter(username=username).exists():
-                username = f"{base_username}{counter}"
-                counter += 1
-            user_data['username'] = username
-
-            # Đặt is_approved dựa trên role
-            user_data['is_approved'] = (role != 'RESTAURANT_USER')
-
-            # Lưu password
-            password = request.data.get('password')
-            user_data.pop('password', None)  # Loại bỏ password khỏi user_data
-
-            # Tạo user
-            user = User(**user_data)
-            user.set_password(password)
-            user.save()
-
-            # Nếu là RESTAURANT_USER, tạo Restaurant
-            response_message = "Đăng ký thành công!"
-            if role == 'RESTAURANT_USER':
-                restaurant_name = request.data.get('restaurant_name').strip()
-                if len(restaurant_name) < 3:
-                    user.delete()
-                    return Response({"error": "Tên nhà hàng phải có ít nhất 3 ký tự."},
-                                    status=status.HTTP_400_BAD_REQUEST)
-                Restaurant.objects.create(name=restaurant_name, owner=user, is_approved=False)
-                response_message = "Tài khoản nhà hàng đã được tạo. Vui lòng chờ Admin phê duyệt."
-
-            response_data = UserSerializer(user).data
-            response_data['message'] = response_message
-            print("Đăng ký thành công:", response_data)
-
+            response_data = UserSerializer(user, context={'request': request}).data
+            response_data['message'] = "Đăng ký CUSTOMER thành công!"
+            print("Đăng ký CUSTOMER thành công:", response_data)
             return Response(response_data, status=status.HTTP_201_CREATED)
 
         except IntegrityError as e:
-            error_message = str(e).lower()
-            print(f"IntegrityError occurred: {error_message}")
+            print(f"IntegrityError occurred: {str(e)}")
             return Response({"error": "Email hoặc username đã tồn tại."}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             print(f"Unexpected error: {str(e)}")
-            return Response({"error": f"Đã xảy ra lỗi không mong muốn: {str(e)}"},
-                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": f"Đã xảy ra lỗi không mong muốn: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
+    @action(methods=['post'], detail=False, url_path='register-restaurant')
+    def register_restaurant(self, request):
+        """Đăng ký người dùng RESTAURANT_USER và tạo Restaurant."""
+        print("Dữ liệu nhận được (RESTAURANT):", request.data)
+        required_fields = ['email', 'password', 'restaurant_name']
+        for field in required_fields:
+            if not request.data.get(field):
+                return Response(
+                    {"error": f"Trường {field} là bắt buộc."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        serializer = UserSerializer(data=request.data, context={'request': request})
+        if not serializer.is_valid():
+            print("Serializer errors:", serializer.errors)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user, error_response = self._create_user(
+                request,
+                serializer.validated_data,
+                role='RESTAURANT_USER',
+                password=request.data.get('password')
+            )
+            if error_response:
+                return error_response
+
+            restaurant_name = request.data.get('restaurant_name').strip()
+            if len(restaurant_name) < 3:
+                user.delete()
+                return Response(
+                    {"error": "Tên nhà hàng phải có ít nhất 3 ký tự."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            Restaurant.objects.create(name=restaurant_name, owner=user)
+
+            response_data = UserSerializer(user, context={'request': request}).data
+            response_data['message'] = "Tài khoản nhà hàng đã được tạo. Vui lòng chờ Admin phê duyệt."
+            print("Đăng ký RESTAURANT thành công:", response_data)
+            return Response(response_data, status=status.HTTP_201_CREATED)
+
+        except IntegrityError as e:
+            print(f"IntegrityError occurred: {str(e)}")
+            return Response({"error": "Email hoặc username đã tồn tại."}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            print(f"Unexpected error: {str(e)}")
+            return Response(
+                {"error": f"Đã xảy ra lỗi không mong muốn: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     @action(methods=['get'], detail=False, url_path='current-user/follow')
     def current_user_followed_restaurants(self, request):
@@ -455,6 +524,13 @@ class UserViewSet(viewsets.ViewSet):
         user = request.user
         favorites = Favorite.objects.filter(user=user)
         serializer = FavoriteSerializer(favorites, many=True)
+        return Response(serializer.data)
+
+    @action(methods=['get'], detail=False, url_path='current-user/food-reviews')
+    def current_user_food_reviews(self, request):
+        user = request.user
+        reviews = FoodReview.objects.filter(user=user)
+        serializer = FoodReviewSerializers(reviews, many=True)
         return Response(serializer.data)
 
 class UserAddressViewSet(viewsets.ViewSet):
@@ -624,6 +700,18 @@ class RestaurantViewSet(viewsets.ViewSet):
         except Restaurant.DoesNotExist:
             return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
 
+    @action(detail=True, methods=['get'])
+    def reviews(self, request, pk=None):
+        """Lấy tất cả restaurant reviews của nhà hàng."""
+        try:
+            restaurant = Restaurant.objects.get(pk=pk)
+            restaurant_reviews = RestaurantReview.objects.filter(restaurant=restaurant)
+            serializer = RestaurantReviewSerializer(restaurant_reviews, many=True)
+            return Response(serializer.data)
+        except Restaurant.DoesNotExist:
+            return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
 class RestaurantAddressViewSet(viewsets.ViewSet):
     def get_permissions(self):
         # Công khai để xem danh sách và chi tiết
@@ -644,7 +732,46 @@ class RestaurantAddressViewSet(viewsets.ViewSet):
         except Restaurant.DoesNotExist:
             return Response({"error": "Restaurant not found"}, status=status.HTTP_404_NOT_FOUND)
 
+class CartViewSet(viewsets.ViewSet, generics.DestroyAPIView):
+    serializer_class = CartSerializer
+    queryset = Cart.objects.all()
+    permission_classes = [permissions.IsAuthenticated]
+
+    @action(methods=['get'], url_path='my-cart', detail=False)
+    def get_my_cart(self, request):
+        try:
+            cart = Cart.objects.get(user=request.user)
+        except Cart.DoesNotExist:
+            return Response(
+                {"error": "Giỏ hàng không tồn tại."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        return Response(CartSerializer(cart).data)
+
+    @action(methods=['get'], url_path='sub-carts', detail=False)
+    def get_my_sub_cart(self, request):
+        try:
+            cart = Cart.objects.get(user=request.user)
+        except Cart.DoesNotExist:
+            return Response(
+                {"error": "Giỏ hàng không tồn tại."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        sub_carts = SubCart.objects.filter(cart=cart)
+        serializer = SubCartSerializer(sub_carts, many=True)
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def get_permissions(self):
+        if self.action in ['get_my_cart']:
+            return [permissions.IsAuthenticated()]
+        return [permissions.AllowAny()]
+
 class SubCartViewSet(viewsets.ViewSet):
+    serializer_class = SubCartSerializer
+    queryset = SubCart.objects.all()
     def get_permissions(self):
         # Yêu cầu đăng nhập cho tất cả hành động vì giỏ hàng là dữ liệu cá nhân
         return [IsAuthenticated()]
@@ -692,12 +819,54 @@ class SubCartViewSet(viewsets.ViewSet):
 
         try:
             sub_cart = SubCart.objects.get(pk=pk, cart__user=user)
+            cart = sub_cart.cart
             sub_cart.delete()
+            if not cart.sub_carts.exists():  # Kiểm tra nếu cart không còn sub_cart nào
+                cart.delete()
+
             return Response({"message": "SubCart deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
         except SubCart.DoesNotExist:
             return Response({"error": "SubCart not found"}, status=status.HTTP_404_NOT_FOUND)
 
+    @action(methods=['get'], url_path='restaurant-sub-cart', detail=False)
+    def get_sub_cart(self, request):
+        restaurant_id = request.query_params.get('restaurantId')
+        user_id = request.query_params.get('userId')
+
+        cart = get_object_or_404(Cart, user__id=user_id)
+        sub_cart = SubCart.objects.filter(cart__id=cart.id, restaurant__id=restaurant_id).first()
+
+        if not sub_cart:
+            return Response({"detail": "Không tìm thấy giỏ hàng"}, status=404)
+
+        return Response(SubCartSerializer(sub_cart).data)
+
+    @action(methods=['post'], url_path='delete-sub-carts', detail=False)
+    def delete_multiple(self, request):
+        cart_id = request.data.get('cartId')
+        ids = request.data.get('ids', [])
+
+        cart = get_object_or_404(Cart, pk=cart_id)
+        if ids:
+            ids = [int(id) for id in ids] #chuyen thanh int
+            sub_carts_to_delete = SubCart.objects.filter(id__in=ids, cart=cart)
+            # Cập nhật lại tổng số lượng sản phẩm trong Cart trước khi xóa
+            total_quantity = 0
+            for sub_cart in sub_carts_to_delete:
+                total_quantity += sub_cart.total_quantity
+            sub_carts_to_delete.delete()
+            # Cập nhật lại item_number trong Cart
+            cart.item_number -= total_quantity
+            cart.save()
+            # Nếu Cart không còn sản phẩm nào, xóa Cart
+            if cart.item_number == 0:
+                cart.delete()
+
+        return Response({"message": "Xóa sub cart thành công!"}, status=status.HTTP_200_OK)
+
 class SubCartItemViewSet(viewsets.ViewSet):
+    serializer_class = SubCartItemSerializer
+    queryset = SubCartItem.objects.all()
     def get_permissions(self):
         # Yêu cầu đăng nhập cho tất cả hành động vì liên quan đến giỏ hàng
         return [IsAuthenticated()]
@@ -761,10 +930,61 @@ class SubCartItemViewSet(viewsets.ViewSet):
 
         try:
             sub_cart_item = SubCartItem.objects.get(pk=pk, sub_cart__cart__user=user)
+            sub_cart = sub_cart_item.sub_cart  # Lưu lại sub_cart trước khi xóa
+            cart = sub_cart.cart  # Lưu lại cart trước khi xóa
             sub_cart_item.delete()
-            return Response({"message": "SubCartItem deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+            # Kiểm tra nếu SubCart không còn item nào thì xóa luôn SubCart
+            if not sub_cart.sub_cart_items.exists():  # Kiểm tra nếu sub_cart không còn item nào
+                sub_cart.delete()
+                # Kiểm tra nếu Cart không còn SubCart nào thì xóa luôn Cart
+                if not cart.sub_carts.exists():  # Kiểm tra nếu cart không còn sub_cart nào
+                    cart.delete()
+
+            return Response({"message": "SubCartItem and related SubCart and Cart deleted successfully."},
+                            status=status.HTTP_204_NO_CONTENT)
+
         except SubCartItem.DoesNotExist:
             return Response({"error": "SubCartItem not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(methods=['post'], detail=False, url_path='delete-multiple')
+    def delete_multiple(self, request):
+        cart_id = request.data.get('cartId')
+        ids = request.data.get('ids', [])
+
+        cart = get_object_or_404(Cart, pk=cart_id)
+
+        if ids:
+            ids = [int(id) for id in ids]
+            sub_cart_items_to_delete = SubCartItem.objects.filter(id__in=ids, sub_cart__cart=cart)
+
+            for sub_cart_item in sub_cart_items_to_delete:
+                sub_cart = sub_cart_item.sub_cart
+
+                # Cập nhật sub_cart.total_quantity và total_price
+                sub_cart.total_quantity -= sub_cart_item.quantity
+                sub_cart.total_price -= sub_cart_item.quantity * sub_cart_item.price
+                sub_cart.save()
+
+                # Cập nhật cart.item_number
+                cart.item_number -= sub_cart_item.quantity
+
+                # Xóa SubCartItem
+                sub_cart_item.delete()
+
+                # Nếu sub_cart không còn item nào thì xóa
+                if not sub_cart.sub_cart_items.exists():
+                    sub_cart.delete()
+
+            # Sau vòng lặp, nếu cart không còn sub_cart nào thì xóa luôn cart
+            if not cart.sub_carts.exists():
+                cart.delete()
+            else:
+                cart.save()
+
+            return Response({"message": "Xóa SubCartItem thành công!"}, status=status.HTTP_200_OK)
+
+        return Response({"error": "Danh sách ID rỗng!"}, status=status.HTTP_400_BAD_REQUEST)
+
 
 class MenuViewSet(viewsets.ViewSet):
     def get_permissions(self):
@@ -866,3 +1086,146 @@ class FavoriteViewSet(mixins.ListModelMixin,
         elif self.action == 'partial_update':  # PATCH
             return [permissions.IsAuthenticated(), IsOwner()]  # Chỉ user đã tạo follow được phép chỉnh sửa
         return super().get_permissions()
+
+class AddItemToCart(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        food_id = int(request.data.get('food_id'))
+        quantity = int(request.data.get('quantity', 1))
+        time_serve = request.data.get('time_serve')
+
+        # Lấy thực phẩm từ database
+        food = get_object_or_404(Food, id=food_id)
+        restaurant = food.restaurant
+
+        # Lấy giá của thực phẩm cho thời gian phục vụ cụ thể
+        food_price = get_object_or_404(FoodPrice, food=food, time_serve=time_serve)
+        price = food_price.price
+
+        print('food name: ', food.name)
+        print('quantity: ', quantity)
+
+        cart, created = Cart.objects.get_or_create(user=user)
+
+        sub_cart, created = SubCart.objects.get_or_create(cart=cart, restaurant=restaurant)
+        # them hoac cap nhat
+        sub_cart_item, created = SubCartItem.objects.get_or_create(
+            food=food, sub_cart=sub_cart,
+            defaults={'restaurant': restaurant,
+                      'quantity': quantity,
+                      'price': price * quantity,}
+        )
+        if not created:
+            sub_cart_item.quantity += quantity
+            print('sub cart item quantity: ', sub_cart_item.quantity)
+            sub_cart_item.price = sub_cart_item.quantity * price
+            print('sub cart item price: ', sub_cart_item.price)
+            sub_cart_item.save()
+
+        # Update sub_cart
+        sub_cart.total_price = sum(item.price for item in sub_cart.sub_cart_items.all())
+        sub_cart.total_quantity = sum(item.quantity for item in sub_cart.sub_cart_items.all())
+        sub_cart.save()
+
+        # Update cart
+        cart.total_price = sum(sub.total_price for sub in cart.sub_carts.all())
+        cart.items_number = cart.sub_carts.count()
+        cart.save()
+
+        return Response({'message': 'Thêm thành công!', 'cart': CartSerializer(cart).data}
+                        , status=status.HTTP_200_OK)
+
+class UpdateItemToSubCart(APIView):
+
+    def patch(self, request, *args, **kwargs):
+        sub_cart_item_id = int(request.data.get('sub_cart_item_id'))
+        quantity = int(request.data.get('quantity'))
+        sub_cart_item = get_object_or_404(SubCartItem, id=sub_cart_item_id)
+
+        # Cập nhật SubCartItem
+        sub_cart_item.quantity += quantity
+        if sub_cart_item.quantity <= 0:
+            sub_cart_item.delete()
+        else:
+            sub_cart_item.save()
+
+        # Update sub_cart
+        sub_cart = sub_cart_item.sub_cart
+        sub_cart.total_price = sum(item.price for item in sub_cart.sub_cart_items.all())
+        sub_cart.total_quantity = sum(item.quantity for item in sub_cart.sub_cart_items.all())
+        if sub_cart.total_quantity <= 0:
+            sub_cart.delete()
+        else:
+            sub_cart.save()
+
+        # Update cart
+        cart = sub_cart.cart
+        cart.total_price = sum(sub.total_price for sub in cart.sub_carts.all())
+        cart.item_number = sum(sub.total_quantity for sub in cart.sub_carts.all())
+        if cart.item_number <= 0:
+            cart.delete()
+        else:
+            cart.save()
+
+        return Response({"message": "Cập nhật thành công."}, status=status.HTTP_200_OK)
+
+class MomoPayment(APIView):
+    def post(self, request):
+        try:
+            # Các tham số MoMo
+            endpoint = "https://test-payment.momo.vn/v2/gateway/api/create"
+            partnerCode = "MOMO"
+            accessKey = "F8BBA842ECF85"
+            secretKey = "K951B6PE1waDMi640xX08PD3vg6EkVlz"
+            redirectUrl = "https://webhook.site/b3088a6a-2d17-4f8d-a383-71389a6c600b"
+            ipnUrl = "https://webhook.site/b3088a6a-2d17-4f8d-a383-71389a6c600b"
+
+            # Tham số từ người dùng
+            amount = str(request.data.get('amount'))
+            orderInfo = request.data.get('orderInfo', 'pay with MoMo')
+            order_id = request.data.get('order_id')  #Lấy order_id từ client
+            orderId = str(uuid.uuid4())
+            requestId = str(uuid.uuid4())
+            requestType = "captureWallet"
+            extraData = ""
+
+            # Tạo chữ ký
+            raw_signature = f"accessKey={accessKey}&amount={amount}&extraData={extraData}&ipnUrl={ipnUrl}" \
+                            f"&orderId={orderId}&orderInfo={orderInfo}&partnerCode={partnerCode}" \
+                            f"&redirectUrl={redirectUrl}&requestId={requestId}&requestType={requestType}"
+            h = hmac.new(bytes(secretKey, 'utf-8'), bytes(raw_signature, 'utf-8'), hashlib.sha256)
+            signature = h.hexdigest()
+
+            # Dữ liệu gửi đến MoMo
+            data = {
+                'partnerCode': partnerCode,
+                'partnerName': "Test",
+                'storeId': "MomoTestStore",
+                'requestId': requestId,
+                'amount': amount,
+                'orderId': orderId,
+                'orderInfo': orderInfo,
+                'redirectUrl': redirectUrl,
+                'ipnUrl': ipnUrl,
+                'lang': "vi",
+                'extraData': extraData,
+                'requestType': requestType,
+                'signature': signature
+            }
+
+            # Gửi yêu cầu đến MoMo
+            response = requests.post(endpoint, json=data, headers={'Content-Type': 'application/json'})
+            momo_response = response.json()
+
+            # Giả sử thanh toán thành công => cập nhật trạng thái thanh toán
+            if momo_response.get('resultCode') == 0:
+                payment = Payment.objects.get(order_id=order_id)
+                payment.status = 'SUCCESS'  # nhớ cập nhật field status trong model Payment
+                payment.save()
+
+            return Response(momo_response, status=response.status_code)
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

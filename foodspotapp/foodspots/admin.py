@@ -1,239 +1,163 @@
 from django.contrib import admin
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.core.mail import send_mail
-from django.contrib.auth import get_user_model
 from .models import (
-    User, Restaurant, Food, FoodCategory, FoodPrice,
-    Menu, Cart, SubCart, SubCartItem, Order, OrderDetail
+    User, Address, Tag, Restaurant, Follow, Favorite, Order, OrderDetail,
+    Payment, FoodCategory, Food, FoodPrice, Menu, RestaurantReview,
+    FoodReview, Cart, SubCart, SubCartItem
 )
 
-User = get_user_model()
+class UserAdmin(BaseUserAdmin):
+    list_display = ('email', 'username', 'role', 'is_approved', 'is_staff', 'is_superuser')
+    list_filter = ('role', 'is_approved', 'is_staff')
+    search_fields = ('email', 'username')
+    ordering = ('email',)
+    fieldsets = (
+        (None, {'fields': ('email', 'password')}),
+        ('Personal info', {'fields': ('username', 'first_name', 'last_name', 'phone_number', 'avatar')}),
+        ('Permissions', {'fields': ('is_approved', 'is_active', 'is_staff', 'is_superuser')}),
+        ('Role', {'fields': ('role',)}),
+        ('Addresses', {'fields': ('addresses',)}),
+    )
+    add_fieldsets = (
+        (None, {
+            'classes': ('wide',),
+            'fields': ('email', 'password1', 'password2', 'role', 'is_approved'),
+        }),
+    )
+    filter_horizontal = ('addresses',)
 
-# Đăng ký model User
-@admin.register(User)
-class UserAdmin(admin.ModelAdmin):
-    list_display = ('email', 'first_name', 'last_name', 'role', 'is_approved', 'is_active')
-    list_filter = ('role', 'is_approved', 'is_active')
-    search_fields = ('email', 'first_name', 'last_name')
-    actions = ['approve_users']
+    def save_model(self, request, obj, form, change):
+        # Lưu trạng thái ban đầu của is_approved (trước khi lưu)
+        if change:  # Chỉ kiểm tra khi chỉnh sửa, không phải khi tạo mới
+            original_user = User.objects.get(pk=obj.pk)
+            was_approved = original_user.is_approved
+        else:
+            was_approved = None
 
-    def approve_users(self, request, queryset):
-        queryset.update(is_approved=True)
-        self.message_user(request, "Đã phê duyệt các tài khoản được chọn.")
-    approve_users.short_description = "Phê duyệt tài khoản được chọn"
+        # Lưu user
+        super().save_model(request, obj, form, change)
 
-    # Kiểm soát quyền truy cập
-    def has_add_permission(self, request):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_change_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_delete_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_view_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-# Đăng ký model Restaurant
-@admin.register(Restaurant)
-class RestaurantAdmin(admin.ModelAdmin):
-    list_display = ('name', 'owner')  # Chỉ giữ các trường chắc chắn tồn tại
-    search_fields = ['name']
-    actions = ['approve_restaurants']
-
-    def approve_restaurants(self, request, queryset):
-        # Giả định có trường is_approved trong Restaurant
-        queryset.update(is_approved=True)
-
-        for r in queryset:
-            email = r.owner.email if r.owner else None  # Kiểm tra owner có tồn tại không
-            if email:  # Chỉ gửi email nếu có email hợp lệ
+        # Gửi email nếu is_approved thay đổi từ False thành True và role là RESTAURANT_USER
+        if change and was_approved is False and obj.is_approved is True and obj.role == 'RESTAURANT_USER':
+            try:
+                restaurant = Restaurant.objects.get(owner=obj)
                 send_mail(
-                    subject="Thông báo phê duyệt nhà hàng của bạn",
-                    message=f"""
-    Xin chào {r.owner.first_name or 'Khách hàng'},
-
-    Nhà hàng "{r.name}" của bạn đã được xác thực thành công! 🎉
-    Hãy đăng nhập bằng tài khoản và mật khẩu bạn đã đăng ký với chúng tôi.
-
-    Cảm ơn bạn đã tham gia nền tảng của chúng tôi!
-
-    Trân trọng,
-    Đội ngũ quản trị.
-    """,
-                    from_email="lequoctrunggg@gmail.com",
-                    recipient_list=[email],
-                    fail_silently=True,  # Không gây lỗi nếu gửi email thất bại
+                    subject='Tài khoản nhà hàng của bạn đã được phê duyệt',
+                    message=(
+                        f'Chào {obj.email},\n\n'
+                        f'Tài khoản nhà hàng "{restaurant.name}" của bạn đã được phê duyệt bởi Admin.\n'
+                        'Bạn có thể bắt đầu quản lý nhà hàng và thêm món ăn trên hệ thống FoodSpots.\n\n'
+                        'Trân trọng,\nĐội ngũ FoodSpots'
+                    ),
+                    from_email='nghianguyen.110616@gmail.com',
+                    recipient_list=[obj.email],
+                    fail_silently=False,
                 )
+                self.message_user(request, f"Email thông báo đã được gửi tới {obj.email}.")
+            except Restaurant.DoesNotExist:
+                self.message_user(request, f"Không tìm thấy nhà hàng liên kết với user {obj.email}. Email không được gửi.")
+            except Exception as e:
+                self.message_user(request, f"Lỗi khi gửi email tới {obj.email}: {str(e)}")
 
-        self.message_user(request, "Nhà hàng đã được phê duyệt!")
-    approve_restaurants.short_description = "Phê duyệt nhà hàng đã chọn"
+class RestaurantAdmin(admin.ModelAdmin):
+    list_display = ('name', 'owner', 'star_rating', 'phone_number')
+    list_filter = ('star_rating',)
+    search_fields = ('name', 'owner__email')
+    filter_horizontal = ('tags',)
 
-    # Kiểm soát quyền truy cập
-    def has_add_permission(self, request):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_change_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_delete_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_view_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-# Đăng ký model Food
-@admin.register(Food)
-class FoodAdmin(admin.ModelAdmin):
-    list_display = ('name', 'restaurant')
+class AddressAdmin(admin.ModelAdmin):
+    list_display = ('name', 'latitude', 'longitude')
     search_fields = ('name',)
 
-    def has_add_permission(self, request):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
+class TagAdmin(admin.ModelAdmin):
+    list_display = ('name',)
+    search_fields = ('name',)
 
-    def has_change_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
+class FollowAdmin(admin.ModelAdmin):
+    list_display = ('user', 'restaurant', 'status')
+    list_filter = ('status',)
+    search_fields = ('user__email', 'restaurant__name')
 
-    def has_delete_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
+class FavoriteAdmin(admin.ModelAdmin):
+    list_display = ('user', 'food', 'status')
+    list_filter = ('status',)
+    search_fields = ('user__email', 'food__name')
 
-    def has_view_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
+class OrderAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'restaurant', 'total', 'status', 'ordered_date')
+    list_filter = ('status', 'ordered_date')
+    search_fields = ('user__email', 'restaurant__name')
 
-@admin.register(FoodCategory)
+class OrderDetailAdmin(admin.ModelAdmin):
+    list_display = ('order', 'food', 'quantity', 'sub_total', 'time_serve')
+    list_filter = ('time_serve',)
+    search_fields = ('order__id', 'food__name')
+
+class PaymentAdmin(admin.ModelAdmin):
+    list_display = ('order', 'payment_method', 'status', 'amount', 'created_date')
+    list_filter = ('status', 'created_date')
+    search_fields = ('order__id',)
+
 class FoodCategoryAdmin(admin.ModelAdmin):
     list_display = ('name',)
     search_fields = ('name',)
 
-    def has_add_permission(self, request):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
+class FoodAdmin(admin.ModelAdmin):
+    list_display = ('name', 'restaurant', 'food_category', 'star_rating', 'is_available')
+    list_filter = ('is_available', 'food_category')
+    search_fields = ('name', 'restaurant__name')
 
-    def has_change_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_delete_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_view_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-@admin.register(FoodPrice)
 class FoodPriceAdmin(admin.ModelAdmin):
-    list_display = ('food', 'price')  # Loại bỏ 'created_at'
+    list_display = ('food', 'time_serve', 'price')
+    list_filter = ('time_serve',)
     search_fields = ('food__name',)
 
-    def has_add_permission(self, request):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_change_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_delete_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_view_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-@admin.register(Menu)
 class MenuAdmin(admin.ModelAdmin):
-    list_display = ('restaurant',)
-    search_fields = ('restaurant__name',)
+    list_display = ('name', 'restaurant', 'time_serve', 'is_active', 'created_date')
+    list_filter = ('is_active', 'time_serve')
+    search_fields = ('name', 'restaurant__name')
+    filter_horizontal = ('foods',)
 
-    def has_add_permission(self, request):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
+class RestaurantReviewAdmin(admin.ModelAdmin):
+    list_display = ('user', 'restaurant', 'star', 'created_date')
+    list_filter = ('star', 'created_date')
+    search_fields = ('user__email', 'restaurant__name')
 
-    def has_change_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
+class FoodReviewAdmin(admin.ModelAdmin):
+    list_display = ('user', 'order_detail', 'star', 'created_date')
+    list_filter = ('star', 'created_date')
+    search_fields = ('user__email', 'order_detail__food__name')
 
-    def has_delete_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_view_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-@admin.register(Cart)
 class CartAdmin(admin.ModelAdmin):
-    list_display = ('user',)
+    list_display = ('user', 'item_number')
     search_fields = ('user__email',)
 
-    def has_add_permission(self, request):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_change_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_delete_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_view_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-@admin.register(SubCart)
 class SubCartAdmin(admin.ModelAdmin):
-    list_display = ('cart', 'restaurant')
+    list_display = ('cart', 'restaurant', 'total_price')
     search_fields = ('cart__user__email', 'restaurant__name')
 
-    def has_add_permission(self, request):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_change_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_delete_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_view_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-@admin.register(SubCartItem)
 class SubCartItemAdmin(admin.ModelAdmin):
-    list_display = ('sub_cart', 'food', 'quantity')
-    search_fields = ('food__name',)
+    list_display = ('sub_cart', 'food', 'quantity', 'price', 'time_serve')
+    list_filter = ('time_serve',)
+    search_fields = ('sub_cart__restaurant__name', 'food__name')
 
-    def has_add_permission(self, request):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_change_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_delete_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_view_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-
-@admin.register(Order)
-class OrderAdmin(admin.ModelAdmin):
-    list_display = ('user', 'status')
-    list_filter = ('status',)
-    search_fields = ('user__email',)
-
-    def has_add_permission(self, request):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_change_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_delete_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_view_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-@admin.register(OrderDetail)
-class OrderDetailAdmin(admin.ModelAdmin):
-    list_display = ('order', 'food', 'quantity')
-    search_fields = ('food__name', 'order__user__email')
-
-    def has_add_permission(self, request):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_change_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_delete_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
-
-    def has_view_permission(self, request, obj=None):
-        return request.user.is_superuser or request.user.role == 'ADMIN'
+# Đăng ký các model
+admin.site.register(User, UserAdmin)
+admin.site.register(Restaurant, RestaurantAdmin)
+admin.site.register(Address, AddressAdmin)
+admin.site.register(Tag, TagAdmin)
+admin.site.register(Follow, FollowAdmin)
+admin.site.register(Favorite, FavoriteAdmin)
+admin.site.register(Order, OrderAdmin)
+admin.site.register(OrderDetail, OrderDetailAdmin)
+admin.site.register(Payment, PaymentAdmin)
+admin.site.register(FoodCategory, FoodCategoryAdmin)
+admin.site.register(Food, FoodAdmin)
+admin.site.register(FoodPrice, FoodPriceAdmin)
+admin.site.register(Menu, MenuAdmin)
+admin.site.register(RestaurantReview, RestaurantReviewAdmin)
+admin.site.register(FoodReview, FoodReviewAdmin)
+admin.site.register(Cart, CartAdmin)
+admin.site.register(SubCart, SubCartAdmin)
+admin.site.register(SubCartItem, SubCartItemAdmin)

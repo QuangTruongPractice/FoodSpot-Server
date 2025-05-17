@@ -1,10 +1,9 @@
+from rest_framework.serializers import ModelSerializer
+from rest_framework.fields import SerializerMethodField
+from .models import (Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview,
+                     FoodPrice, Follow, Favorite, User, Address, Restaurant, Cart, SubCart, SubCartItem, Menu)
 from rest_framework import serializers
 from cloudinary.uploader import upload
-from rest_framework.serializers import ModelSerializer, SerializerMethodField
-from .models import Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview, FoodPrice, Follow, Favorite, User, Address, Restaurant, SubCart, SubCartItem, Menu
-from PIL import Image
-import io
-from django.core.files.base import ContentFile
 
 
 class BaseSerializer(ModelSerializer):
@@ -107,36 +106,12 @@ class RestaurantSerializer(BaseSerializer):
         model = Restaurant
         fields = ['id', 'name', 'avatar', 'phone_number', 'owner', 'star_rating', 'shipping_fee_per_km', 'address']
 
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        if instance.avatar:
-            data['avatar'] = instance.avatar.url
-        else:
-            data['avatar'] = None
-        return data
-
 class RestaurantAddressSerializer(BaseSerializer):
     address = AddressSerializer()
 
     class Meta:
         model = Restaurant
         fields = ['id', 'name', 'address']
-
-class SubCartItemSerializer(BaseSerializer):
-    food = serializers.SlugRelatedField(slug_field='name', read_only=True)
-    restaurant = serializers.SlugRelatedField(slug_field='name', read_only=True)
-
-    class Meta:
-        model = SubCartItem
-        fields = ['id', 'food', 'restaurant', 'quantity', 'price']
-
-class SubCartSerializer(BaseSerializer):
-    sub_cart_items = SubCartItemSerializer(many=True, read_only=True)
-    restaurant = serializers.SlugRelatedField(slug_field='name', read_only=True)
-
-    class Meta:
-        model = SubCart
-        fields = ['id', 'cart', 'restaurant', 'total_price', 'sub_cart_items']
 
 class MenuSerializer(BaseSerializer):
     foods = serializers.SerializerMethodField()
@@ -148,32 +123,31 @@ class MenuSerializer(BaseSerializer):
 
     def get_foods(self, obj):
         time_serve = obj.time_serve
+        # Lọc foods theo restaurant và time_serve
         queryset = obj.foods.filter(
             restaurant=obj.restaurant,
             prices__time_serve=time_serve
         ).distinct()
+
         serializer = FoodInMenuSerializer(queryset, many=True, context={'time_serve': time_serve})
         return serializer.data
 
 class FoodInMenuSerializer(BaseSerializer):
     price = serializers.SerializerMethodField()
+    image = serializers.SerializerMethodField()
 
     class Meta:
         model = Food
         fields = ['id', 'name', 'image', 'description', 'price']
 
     def get_price(self, obj):
+        # Lấy time_serve từ context truyền vào
         time_serve = self.context.get('time_serve')
         price_obj = obj.prices.filter(time_serve=time_serve).first()
         return price_obj.price if price_obj else None
 
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        if instance.image:
-            data['image'] = instance.image.url
-        else:
-            data['image'] = None
-        return data
+    def get_image(self, obj):
+        return obj.image.url if obj.image else None
 
 class FoodCategorySerializer(BaseSerializer):
     class Meta:
@@ -188,28 +162,30 @@ class FoodPriceSerializer(BaseSerializer):
 class FoodSerializers(BaseSerializer):
     prices = FoodPriceSerializer(many=True, read_only=True)
     restaurant_name = serializers.CharField(source="restaurant.name", read_only=True)
-
     class Meta:
         model = Food
-        fields = ["id", "name", "restaurant", "restaurant_name", "image", "food_category", "prices", "description"]
+        fields = ["id", "name", "restaurant", "restaurant_name","image", "food_category",
+                  "prices", "description", "is_available", "star_rating"]
+        extra_kwargs = {
+            'name': {'required': True},
+            'restaurant': {'required': True},
+            'food_category': {'required': True},
+        }
 
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        if instance.image:
-            data['image'] = instance.image.url
-        else:
-            data['image'] = None
-        return data
+    def validate_name(self, value):
+        if not value:
+            raise serializers.ValidationError("Tên món ăn là bắt buộc")
+        return value
 
 class OrderDetailSerializer(BaseSerializer):
     food = serializers.SerializerMethodField()
-
     class Meta:
         model = OrderDetail
-        fields = ['id', 'food', 'order', 'time_serve', 'quantity', 'sub_total']
+        fields = ['id', 'food', 'order', 'time_serve','quantity', 'sub_total']
 
     def get_food(self, obj):
-        food_data = FoodSerializers(obj.food).data
+        food_data = FoodSerializers(obj.food).data  # Lấy thông tin đầy đủ món ăn
+        # Lọc ra chỉ 1 price ứng với time_serve của OrderDetail hiện tại
         matched_price = next(
             (price for price in food_data['prices'] if price['time_serve'] == obj.time_serve),
             None
@@ -219,10 +195,12 @@ class OrderDetailSerializer(BaseSerializer):
 
 class OrderSerializer(BaseSerializer):
     address = serializers.PrimaryKeyRelatedField(queryset=Address.objects.all())
+    restaurant_name = serializers.CharField(source='restaurant.name', read_only=True)
 
     class Meta:
         model = Order
-        fields = ['id', 'user', 'restaurant', 'ordered_date', 'address', 'total', 'status']
+        fields = ['id', 'user', 'restaurant', 'restaurant_name', 'ordered_date', 'address',
+                  'total', 'status']
         extra_kwargs = {
             'user': {'read_only': True},
             'ordered_date': {'read_only': True},
@@ -230,18 +208,27 @@ class OrderSerializer(BaseSerializer):
 
 class FoodReviewSerializers(BaseSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
-
+    avatar = serializers.SerializerMethodField()
     class Meta:
         model = FoodReview
-        fields = ['id', 'user', 'user_name', 'order_detail', 'comment', 'created_date', 'star']
+        fields = ['id', 'user', 'user_name', 'avatar', 'order_detail', 'comment', 'created_date', 'star', 'replies']
+
+    def get_replies(self, obj):
+        replies = FoodReview.objects.filter(parent=obj)
+        return FoodReviewSerializers(replies, many=True).data
+
+    def get_avatar(self, obj):
+        return obj.user.avatar.url if obj.user.avatar else None
 
 class RestaurantReviewSerializer(BaseSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
-    restaurant_name = serializers.CharField(source='restaurant.name', read_only=True)
-
+    avatar = serializers.SerializerMethodField()
     class Meta:
         model = RestaurantReview
-        fields = ['id', 'user', 'user_name', 'restaurant', 'restaurant_name', 'comment', 'created_date', 'star']
+        fields = ['id', 'user', 'user_name', 'avatar', 'restaurant', 'comment', 'created_date', 'star']
+
+    def get_avatar(self, obj):
+        return obj.user.avatar.url if obj.user.avatar else None
 
 class FollowSerializer(BaseSerializer):
     class Meta:
@@ -252,3 +239,25 @@ class FavoriteSerializer(BaseSerializer):
     class Meta:
         model = Favorite
         fields = ['id', 'user', 'food', 'status']
+
+class SubCartItemSerializer(BaseSerializer):
+    food = FoodSerializers()
+    restaurant = serializers.StringRelatedField()
+
+    class Meta:
+        model = SubCartItem
+        fields = ['id', 'food', 'restaurant', 'sub_cart', 'quantity', 'price']
+
+class SubCartSerializer(BaseSerializer):
+    sub_cart_items = SubCartItemSerializer(many=True, read_only=True)
+    restaurant_name = serializers.CharField(source='restaurant.name', read_only=True)
+
+    class Meta:
+        model = SubCart
+        fields = ['id', 'cart', 'restaurant', 'restaurant_name', 'total_price', 'total_quantity', 'sub_cart_items']
+
+class CartSerializer(BaseSerializer):
+    user = UserSerializer()
+    class Meta:
+        model = Cart
+        fields = ['id', 'user', 'item_number', 'total_price']
