@@ -4,14 +4,12 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     RestaurantViewSet, UserViewSet, UserAddressViewSet,
     RestaurantAddressViewSet, SubCartViewSet, SubCartItemViewSet, MenuViewSet,
-    FollowViewSet, FavoriteViewSet, CartViewSet, AddItemToCart, UpdateItemToSubCart, MomoPayment
+    CartViewSet, AddItemToCart, UpdateItemToSubCart, MomoPayment
 )
 
 router = DefaultRouter()
 router.register('orders', views.OrderViewSet, basename='orders')
 router.register('order-detail', views.OrderDetailViewSet, basename='order-detail')
-router.register('follow', views.FollowViewSet, basename='follow')
-router.register('favorite', views.FavoriteViewSet, basename='favorite')
 router.register('foods', views.FoodViewSet, basename='foods')
 router.register('foods-category', views.FoodCategoryViewSet, basename='foods-category')
 router.register('foods-review', views.FoodReviewViewSet, basename='foods-review')

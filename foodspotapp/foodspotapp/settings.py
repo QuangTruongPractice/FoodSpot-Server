@@ -23,10 +23,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-qri44j=$2%je#5+k@_4z9y^&e9kgb^@5e(16u(bj@2nk_wecl@'
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# CLIENT_ID = 'Bub4SNep8terpqvBRqpknxW7WvwLlKcC4OB3bzun'
+# CLIENT_SECRET = 'wuUjLAz7ntWmvEdR2EU9vWQgKqUxD439iER4ugIY18xGHtLg41mSm6oKjI6jWm39how87TGbksNozFhETENTxvbz5AXnSEU6UOd0l8fVERhZpoTlwU2dPho1sN5lplzJ'
 
-ALLOWED_HOSTS = ['tranquangtruong25.pythonanywhere.com', '127.0.0.1', 'localhost', '*']
+# SECURITY WARNING: don't run with debug turned on in production!
+DEBUG = False
+
+ALLOWED_HOSTS = ['tranquangtruong25.pythonanywhere.com', '127.0.0.1', 'localhost' ,'*']
 
 AUTH_USER_MODEL = 'foodspots.User'
 
@@ -50,9 +53,10 @@ INSTALLED_APPS = [
     'drf_yasg',
     'corsheaders',
 ]
+OAUTH2_PROVIDER = { 'OAUTH2_BACKEND_CLASS': 'oauth2_provider.oauth2_backends.JSONOAuthLibCore' }
+
 
 OAUTH2_PROVIDER = {
-    'OAUTH2_BACKEND_CLASS': 'oauth2_provider.oauth2_backends.JSONOAuthLibCore',
     'SCOPES': {'read': 'Read scope', 'write': 'Write scope'},
     'ACCESS_TOKEN_EXPIRE_SECONDS': 360000,  # Token hết hạn sau 100 giờ
 }
@@ -79,8 +83,14 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 4,
 }
 
+OAUTH2_PROVIDER = {
+    'SCOPES': {'read': 'Read scope', 'write': 'Write scope'},
+    'ACCESS_TOKEN_EXPIRE_SECONDS': 360000,  # Token hết hạn sau 100 giờ
+}
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
@@ -179,19 +189,9 @@ import cloudinary.uploader
 from cloudinary.utils import cloudinary_url
 
 # Configuration
-# Nghia
 cloudinary.config(
-    cloud_name = "ddke8odpp",
-    api_key = "967889279184172",
-    api_secret = "kSu8NtNakUyi5fwtUdcumtLRdA4", # Click 'View API Keys' above to copy your API secret
+    cloud_name='derx1izam',
+    api_key='826692895649512',
+    api_secret='aEf9hn_PrTeOXTOOJCz6k8Ucf3U',
     secure=True
 )
-#Truong
-# cloudinary.config(
-#     cloud_name='derx1izam',
-#     api_key='826692895649512',
-#     api_secret='aEf9hn_PrTeOXTOOJCz6k8Ucf3U',
-#     secure=True
-# )
-client_id = "ly6xF1VvDFftDXCFUZtr3ZNNzLqcTUzv1uz7wmVO"
-client_secrec = "tVdL3xRmmzbdc1DrI4IP4SqxQAjo1uAa7BJ64l00jB5R3wZg06VPyNNwrYMHlblZFAiCnakzFQc8Pbwdov5n7g5lhuoFxbPLkMDlSmS94CM5mpbbTYzCJsYhRK7RkBMV"
