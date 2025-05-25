@@ -203,8 +203,8 @@ cloudinary.config(
 #     secure=True
 # )
 ALLOWED_HOSTS = ['*']
-client_id = "ly6xF1VvDFftDXCFUZtr3ZNNzLqcTUzv1uz7wmVO"
-client_secrec = "tVdL3xRmmzbdc1DrI4IP4SqxQAjo1uAa7BJ64l00jB5R3wZg06VPyNNwrYMHlblZFAiCnakzFQc8Pbwdov5n7g5lhuoFxbPLkMDlSmS94CM5mpbbTYzCJsYhRK7RkBMV"
+client_id = "k8KnkQk0NcvluzvlDBBeX64PRvgUDA9CUT8Av0PW"
+client_secrec = "PnpxNaNWxexgUpjKWRgAkeTdZVENwQFSpnaRxfjyjp8ayBrzPjykiwBzDEXQ3NM794Kcq62dFiYL0L0KWDdgwW8g7OQ7mEnrDzrDh3qJjANeoSaTujkEcrHaGQIV0f1i"
 
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'

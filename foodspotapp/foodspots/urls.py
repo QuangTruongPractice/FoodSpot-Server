@@ -20,6 +20,7 @@ router.register(r'restaurant-address', RestaurantAddressViewSet, basename='resta
 router.register(r'sub-cart', SubCartViewSet, basename='subcart')
 router.register(r'sub-cart-item', SubCartItemViewSet, basename='subcartitem')
 router.register(r'menus', MenuViewSet, basename='menu')
+router.register(r'categories', views.CartViewSet, basename='category')
 
 urlpatterns = [
     path('', include(router.urls))

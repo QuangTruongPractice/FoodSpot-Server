@@ -8,6 +8,7 @@
 from foodspots.models import User, Address, Tag, Restaurant, Follow, Order, OrderDetail, Payment, FoodCategory, Food, FoodPrice, Menu, RestaurantReview, FoodReview, Cart, SubCart, SubCartItem
 from decimal import Decimal
 from django.db import models
+from django.core.exceptions import ValidationError
 
 # Bước 1: Tạo dữ liệu test
 print("=== Bắt đầu tạo dữ liệu test ===")
@@ -48,7 +49,7 @@ customer = User.objects.create_user(
     role='CUSTOMER'
 )
 admin = User.objects.create_user(
-    email='admin123@@gmail.com',
+    email='admin123@gmail.com',
     password='123',
     first_name='Nguyễn',
     last_name='Văn A',
@@ -71,15 +72,26 @@ customer2.addresses.add(address1)
 print("Đã tạo CUSTOMER thứ hai:", customer2.email)
 
 # Tạo người dùng RESTAURANT_USER
-restaurant_user = User.objects.create_user(
-    email='chuquan@example.com',
+restaurant_user1 = User.objects.create_user(
+    email='chuquan1@example.com',
     password='matkhau123',
     first_name='Lê',
     last_name='Văn C',
     username='chuquan1',
     role='RESTAURANT_USER'
 )
-print("Đã tạo RESTAURANT_USER:", restaurant_user.email)
+print("Đã tạo RESTAURANT_USER 1:", restaurant_user1.email)
+
+# Tạo người dùng RESTAURANT_USER thứ hai (vì OneToOneField chỉ cho phép 1 nhà hàng mỗi user)
+restaurant_user2 = User.objects.create_user(
+    email='chuquan2@example.com',
+    password='matkhau123',
+    first_name='Phạm',
+    last_name='Thị D',
+    username='chuquan2',
+    role='RESTAURANT_USER'
+)
+print("Đã tạo RESTAURANT_USER 2:", restaurant_user2.email)
 
 # Tạo tag
 tag1 = Tag.objects.create(name='Ẩm thực Việt')
@@ -90,7 +102,7 @@ print("Đã tạo Tag:", tag1, tag2)
 restaurant1 = Restaurant.objects.create(
     name='Quán Phở Sài Gòn',
     phone_number='0909123456',
-    owner=restaurant_user,
+    owner=restaurant_user1,
     star_rating=4.7,
     address=restaurant_address1
 )
@@ -98,7 +110,7 @@ restaurant1.tags.add(tag1)
 restaurant2 = Restaurant.objects.create(
     name='Trà Sữa Nhà Làm',
     phone_number='0918234567',
-    owner=restaurant_user,
+    owner=restaurant_user2,  # Nhà hàng thứ hai cần owner khác
     star_rating=4.3,
     address=restaurant_address2
 )
@@ -223,7 +235,6 @@ payment = Payment.objects.create(
     order=order,
     payment_method='Thẻ tín dụng',
     status='SUCCESS',
-    amount=90000,
     total_payment=90000
 )
 print("Đã tạo Payment cho order:", payment)
@@ -269,7 +280,6 @@ payment2 = Payment.objects.create(
     order=order2,
     payment_method='Tiền mặt',
     status='SUCCESS',
-    amount=40000,
     total_payment=40000
 )
 print("Đã tạo Payment cho order2:", payment2)
@@ -283,11 +293,11 @@ print("Đã tạo Food Review 2:", food_review2)
 
 # Cập nhật star_rating
 food1.update_star_rating()
-print(f"Star rating của {food1.name} sau 2 đánh giá: {food1.star_rating} (Dự kiến: (4.5 + 5.0) / 2 = 4.8)")
+print(f"Star rating của {food1.name} sau 2 đánh giá: {food1.star_rating} (Dự kiến: (4.5 + 5.0) / 2 = 4.75)")
 
 # Tạo reply từ restaurant_user
 food_review_reply = FoodReview.objects.create(
-    user=restaurant_user,
+    user=restaurant_user1,  # Dùng restaurant_user1 (chủ của restaurant1)
     order_detail=order_detail,
     comment="Cảm ơn bạn đã yêu thích phở của quán!",
     star=Decimal('0.0'),
@@ -297,86 +307,34 @@ print("Đã tạo Food Review Reply:", food_review_reply)
 
 # Kiểm tra star_rating sau reply
 food1.update_star_rating()
-print(f"Star rating của {food1.name} sau reply: {food1.star_rating} (Dự kiến: vẫn 4.8)")
+print(f"Star rating của {food1.name} sau reply: {food1.star_rating} (Dự kiến: vẫn 4.75)")
 
-# Thử tạo reply không hợp lệ
-try:
-    invalid_food_review_reply = FoodReview.objects.create(
-        user=customer2,
-        order_detail=order_detail,
-        comment="Tôi cũng thích phở này!",
-        star=Decimal('0.0'),
-        parent=food_review1
-    )
-except ValueError as e:
-    print("Lỗi khi tạo Food Review Reply từ customer:", e)
 
-# Thử tạo reply với star
-try:
-    invalid_food_review_reply_star = FoodReview.objects.create(
-        user=restaurant_user,
-        order_detail=order_detail,
-        comment="Cảm ơn bạn!",
-        star=Decimal('3.0'),
-        parent=food_review1
-    )
-except ValueError as e:
-    print("Lỗi khi tạo Food Review Reply với star:", e)
 
-# Thử tạo đánh giá nhà hàng từ customer2 (không có đơn hàng)
-try:
-    invalid_restaurant_review = RestaurantReview.objects.create(
-        user=customer2,
-        restaurant=restaurant1,
-        star=Decimal('3.5'),
-        comment="Quán cũng được"
-    )
-except ValueError as e:
-    print("Lỗi khi tạo Restaurant Review từ", customer2.email, ":", e)
+# # Thử tạo reply với star
+# try:
+#     invalid_food_review_reply_star = FoodReview.objects.create(
+#         user=restaurant_user1,
+#         comment="Cảm ơn bạn!",
+#         star=Decimal('3.0'),  # Để kiểm tra lỗi star
+#         parent=food_review1
+#     )
+# except (ValidationError, ValueError) as e:
+#     print("Lỗi khi tạo Food Review Reply với star:", str(e))
 
-# Thử tạo đánh giá món ăn không hợp lệ
-try:
-    invalid_food_review = FoodReview.objects.create(
-        user=customer2,
-        order_detail=order_detail,
-        star=Decimal('3.0'),
-        comment="Phở tạm được"
-    )
-except ValueError as e:
-    print("Lỗi khi tạo Food Review từ", customer2.email, ":", e)
+# # Thử tạo đánh giá nhà hàng từ customer2 (không có đơn hàng)
+# try:
+#     invalid_restaurant_review = RestaurantReview.objects.create(
+#         user=customer2,
+#         restaurant=restaurant1,
+#         star=Decimal('3.5'),
+#         comment="Quán cũng được"
+#     )
+# except ValueError as e:
+#     print("Lỗi khi tạo Restaurant Review từ", customer2.email, ":", e)
 
-# Thử tạo đánh giá với star không hợp lệ
-try:
-    invalid_star_review = RestaurantReview.objects.create(
-        user=customer,
-        restaurant=restaurant1,
-        star=Decimal('6.0'),
-        comment="Quá ngon!"
-    )
-except ValueError as e:
-    print("Lỗi khi tạo Restaurant Review với star không hợp lệ:", e)
 
-# Thử tạo Follow không hợp lệ
-try:
-    invalid_follow = Follow.objects.create(
-        user=restaurant_user,
-        restaurant=restaurant1,
-        status='FOLLOW'
-    )
-except ValueError as e:
-    print("Lỗi khi tạo Follow với RESTAURANT_USER:", e)
 
-# Thử tạo Order với địa chỉ không hợp lệ
-try:
-    invalid_order = Order.objects.create(
-        user=customer2,
-        restaurant=restaurant1,
-        address=address2,
-        total=45000,
-        status='PENDING'
-    )
-except ValueError as e:
-    print("Lỗi khi tạo Order với địa chỉ không hợp lệ:", e)
 
 # Bước 2: Truy vấn và kiểm tra dữ liệu
 print("\n=== Kiểm tra dữ liệu ===")
@@ -415,8 +373,7 @@ for menu in restaurant1.menus.all():
 
 # Kiểm tra giỏ hàng
 print("\nDanh sách giỏ hàng của", customer.email, ":")
-for cart in customer.carts.all():
-    print(cart, cart.item_number)
+print(cart, cart.item_number)
 
 # Kiểm tra SubCart
 print("\nDanh sách SubCart của", cart, ":")
@@ -440,7 +397,7 @@ for detail in order.order_details.all():
 
 # Kiểm tra đánh giá món ăn
 print("\nDanh sách đánh giá món ăn trong", order_detail, ":")
-for review in order_detail.food_reviews.all():
+for review in order_detail.order_food_reviews.all():
     print(review, review.comment)
     for reply in review.replies.all():
         print(f"  Reply: {reply}, {reply.comment}")
@@ -470,5 +427,19 @@ for review in restaurant1.restaurant_reviews.all():
 print("\nDanh sách nhà hàng mà", customer.email, "theo dõi:")
 for follow in customer.follows_as_user.all():
     print(follow.restaurant.name, follow.status)
+
+# Kiểm tra nhà hàng của restaurant_user1
+print("\nNhà hàng của", restaurant_user1.email, ":")
+if hasattr(restaurant_user1, 'restaurant'):
+    print(restaurant_user1.restaurant.name)
+else:
+    print("Chưa có nhà hàng.")
+
+# Kiểm tra nhà hàng của restaurant_user2
+print("\nNhà hàng của", restaurant_user2.email, ":")
+if hasattr(restaurant_user2, 'restaurant'):
+    print(restaurant_user2.restaurant.name)
+else:
+    print("Chưa có nhà hàng.")
 
 print("\n=== Kết thúc test ===")

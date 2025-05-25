@@ -95,7 +95,7 @@ class OrderDetailAdmin(admin.ModelAdmin):
     search_fields = ('order__id', 'food__name')
 
 class PaymentAdmin(admin.ModelAdmin):
-    list_display = ('order', 'payment_method', 'status', 'amount', 'created_date')
+    list_display = ('order', 'payment_method', 'status', 'total_payment', 'created_date')
     list_filter = ('status', 'created_date')
     search_fields = ('order__id',)
 

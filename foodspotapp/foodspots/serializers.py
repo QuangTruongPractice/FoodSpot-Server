@@ -106,6 +106,36 @@ class RestaurantSerializer(BaseSerializer):
         model = Restaurant
         fields = ['id', 'name', 'avatar', 'phone_number', 'owner', 'star_rating', 'shipping_fee_per_km', 'address']
 
+class RestaurantSerializer(serializers.ModelSerializer):
+    address = AddressSerializer()
+    avatar = serializers.ImageField(allow_null=True, required=False)
+
+    class Meta:
+        model = Restaurant
+        fields = ['id', 'name', 'phone_number', 'shipping_fee_per_km', 'address', 'avatar']
+
+    def update(self, instance, validated_data):
+        print("Validated data in serializer:", validated_data)  # Log để debug
+        address_data = validated_data.pop('address', None)
+
+        # Cập nhật các trường cơ bản
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        # Cập nhật Address
+        if address_data and instance.address:
+            address = instance.address
+            for attr, value in address_data.items():
+                setattr(address, attr, value)
+            address.save()
+        elif address_data and not instance.address:
+            # Tạo mới Address nếu không tồn tại
+            address = Address.objects.create(**address_data)
+            instance.address = address
+
+        instance.save()
+        return instance
+
 class RestaurantAddressSerializer(BaseSerializer):
     address = AddressSerializer()
 
