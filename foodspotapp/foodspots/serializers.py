@@ -87,6 +87,7 @@ class UserSerializer(BaseSerializer):
         else:
             data['avatar'] = None
         return data
+
 class AddressSerializer(serializers.ModelSerializer):
     class Meta:
         model = Address
@@ -102,10 +103,33 @@ class UserAddressSerializer(serializers.ModelSerializer):
 class RestaurantSerializer(BaseSerializer):
     owner = UserSerializer(read_only=True)
     address = AddressSerializer()
+    avatar = serializers.ImageField(allow_null=True, required=False)
 
     class Meta:
         model = Restaurant
         fields = ['id', 'name', 'avatar', 'phone_number', 'owner', 'star_rating', 'shipping_fee_per_km', 'address']
+
+    def update(self, instance, validated_data):
+        print("Validated data in serializer:", validated_data)  # Log để debug
+        address_data = validated_data.pop('address', None)
+
+        # Cập nhật các trường cơ bản
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        # Cập nhật Address
+        if address_data and instance.address:
+            address = instance.address
+            for attr, value in address_data.items():
+                setattr(address, attr, value)
+            address.save()
+        elif address_data and not instance.address:
+            # Tạo mới Address nếu không tồn tại
+            address = Address.objects.create(**address_data)
+            instance.address = address
+
+        instance.save()
+        return instance
 
 class RestaurantAddressSerializer(serializers.ModelSerializer):
     address = AddressSerializer()
@@ -139,7 +163,7 @@ class FoodInMenuSerializer(BaseSerializer):
 
     class Meta:
         model = Food
-        fields = ['id', 'name', 'image', 'description', 'price']
+        fields = ['id', 'name', 'image', 'description', 'price', 'is_available']
 
     def get_price(self, obj):
         # Lấy time_serve từ context truyền vào
@@ -167,6 +191,16 @@ class FoodSerializers(BaseSerializer):
         model = Food
         fields = ["id", "name", "restaurant", "restaurant_name","image", "food_category",
                   "prices", "description", "is_available", "star_rating"]
+        extra_kwargs = {
+            'name': {'required': True},
+            'restaurant': {'required': True},
+            'food_category': {'required': True},
+        }
+
+    def validate_name(self, value):
+        if not value:
+            raise serializers.ValidationError("Tên món ăn là bắt buộc")
+        return value
 
 class OrderDetailSerializer(BaseSerializer):
     food = serializers.SerializerMethodField()

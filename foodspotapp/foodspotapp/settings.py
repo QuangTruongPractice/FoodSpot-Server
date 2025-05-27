@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 from pathlib import Path
+
 import corsheaders.middleware
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -23,19 +24,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-qri44j=$2%je#5+k@_4z9y^&e9kgb^@5e(16u(bj@2nk_wecl@'
 
-# CLIENT_ID = 'Bub4SNep8terpqvBRqpknxW7WvwLlKcC4OB3bzun'
-# CLIENT_SECRET = 'wuUjLAz7ntWmvEdR2EU9vWQgKqUxD439iER4ugIY18xGHtLg41mSm6oKjI6jWm39how87TGbksNozFhETENTxvbz5AXnSEU6UOd0l8fVERhZpoTlwU2dPho1sN5lplzJ'
-
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
-ALLOWED_HOSTS = ['tranquangtruong25.pythonanywhere.com', '127.0.0.1', 'localhost' ,'*']
+ALLOWED_HOSTS = ['tranquangtruong25.pythonanywhere.com', '127.0.0.1', 'localhost']
 
 AUTH_USER_MODEL = 'foodspots.User'
 
 
 # Application definition
-
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -53,13 +50,7 @@ INSTALLED_APPS = [
     'drf_yasg',
     'corsheaders',
 ]
-OAUTH2_PROVIDER = { 'OAUTH2_BACKEND_CLASS': 'oauth2_provider.oauth2_backends.JSONOAuthLibCore' }
 
-
-OAUTH2_PROVIDER = {
-    'SCOPES': {'read': 'Read scope', 'write': 'Write scope'},
-    'ACCESS_TOKEN_EXPIRE_SECONDS': 360000,  # Token hết hạn sau 100 giờ
-}
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
@@ -112,7 +103,7 @@ WSGI_APPLICATION = 'foodspotapp.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
-
+#Nghia
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -122,6 +113,16 @@ DATABASES = {
         'HOST': ''
     }
 }
+#Truong
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.mysql',
+#         'NAME': 'foodspotdb',
+#         'USER': 'root',
+#         'PASSWORD': 'Admin@123',
+#         'HOST': ''
+#     }
+# }
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
@@ -156,10 +157,8 @@ USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
-import os
-STATIC_URL = 'static/'
 
-STATIC_ROOT = os.path.join(BASE_DIR, "static")
+STATIC_URL = 'static/'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
@@ -189,9 +188,45 @@ import cloudinary.uploader
 from cloudinary.utils import cloudinary_url
 
 # Configuration
+# Nghia
 cloudinary.config(
-    cloud_name='derx1izam',
-    api_key='826692895649512',
-    api_secret='aEf9hn_PrTeOXTOOJCz6k8Ucf3U',
+    cloud_name = "ddke8odpp",
+    api_key = "967889279184172",
+    api_secret = "kSu8NtNakUyi5fwtUdcumtLRdA4", # Click 'View API Keys' above to copy your API secret
     secure=True
 )
+#Truong
+# cloudinary.config(
+#     cloud_name='derx1izam',
+#     api_key='826692895649512',
+#     api_secret='aEf9hn_PrTeOXTOOJCz6k8Ucf3U',
+#     secure=True
+# )
+ALLOWED_HOSTS = ['*']
+client_id = "k8KnkQk0NcvluzvlDBBeX64PRvgUDA9CUT8Av0PW"
+client_secrec = "PnpxNaNWxexgUpjKWRgAkeTdZVENwQFSpnaRxfjyjp8ayBrzPjykiwBzDEXQ3NM794Kcq62dFiYL0L0KWDdgwW8g7OQ7mEnrDzrDh3qJjANeoSaTujkEcrHaGQIV0f1i"
+
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'nghianguyen.110616@gmail.com'
+EMAIL_HOST_PASSWORD = 'lvvz rbkb rqmw pnon'
+DEFAULT_FROM_EMAIL = 'nghianguyen.110616@gmail.com'
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'loggers': {
+        '': {
+            'handlers': ['console'],
+            'level': 'INFO',
+        },
+    },
+}
