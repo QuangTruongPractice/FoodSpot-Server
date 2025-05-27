@@ -106,14 +106,6 @@ class RestaurantSerializer(BaseSerializer):
         model = Restaurant
         fields = ['id', 'name', 'avatar', 'phone_number', 'owner', 'star_rating', 'shipping_fee_per_km', 'address']
 
-class RestaurantSerializer(serializers.ModelSerializer):
-    address = AddressSerializer()
-    avatar = serializers.ImageField(allow_null=True, required=False)
-
-    class Meta:
-        model = Restaurant
-        fields = ['id', 'name', 'phone_number', 'shipping_fee_per_km', 'address', 'avatar']
-
     def update(self, instance, validated_data):
         print("Validated data in serializer:", validated_data)  # Log để debug
         address_data = validated_data.pop('address', None)
