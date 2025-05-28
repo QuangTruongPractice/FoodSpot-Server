@@ -562,6 +562,25 @@ class UserViewSet(viewsets.ViewSet):
         serializer = FoodReviewSerializers(reviews, many=True)
         return Response(serializer.data)
 
+    @action(methods=['get'], detail=False, url_path='current-user/restaurant')
+    def get_user_restaurant(self, request):
+        user = request.user
+        if user.role != 'RESTAURANT_USER':
+            return Response(
+                {"error": "Chỉ người dùng có vai trò RESTAURANT_USER mới có thể xem thông tin nhà hàng của mình."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            restaurant = Restaurant.objects.get(owner=user)
+            serializer = RestaurantSerializer(restaurant, context={'request': request})
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Restaurant.DoesNotExist:
+            return Response(
+                {"error": "Người dùng này không sở hữu nhà hàng nào."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
 class UserAddressViewSet(viewsets.ViewSet):
     def get_permissions(self):
         return [IsAuthenticated()]
