@@ -1201,3 +1201,18 @@ class MomoPayment(APIView):
 
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class CheckOrdered(APIView):
+    def get_permissions(self):
+        return [IsAuthenticated()]
+
+    def get(self, request):
+        restaurant_id = request.query_params.get("restaurant_id")
+
+        if not restaurant_id:
+            return Response(
+                {"error": "restaurant_id is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        has_ordered = Order.objects.filter(user=request.user, restaurant_id=restaurant_id).exists()
+        return Response({"has_ordered": has_ordered})
