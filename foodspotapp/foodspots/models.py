@@ -231,26 +231,23 @@ class Food(models.Model):
     def update_star_rating(self):
         order_details = self.order_details.all()
         reviews = FoodReview.objects.filter(order_detail__in=order_details, parent=None)
-        if reviews.exists():
-            self.star_rating = sum(review.star for review in reviews) / reviews.count()
-        else:
-            self.star_rating = 0.0
+        self.star_rating = reviews.aggregate(avg=Avg('star'))['avg'] or 0.0
         self.save()
 
     def __str__(self):
         return self.name
 
-
 class FoodPrice(models.Model):
     food = models.ForeignKey(Food, on_delete=models.CASCADE, related_name='prices')
     time_serve = models.CharField(max_length=20, choices=TIME_SERVE_CHOICES)
-    price = models.FloatField()
+    price = models.IntegerField()
 
     class Meta:
         unique_together = ('food', 'time_serve')
 
     def __str__(self):
         return f"{self.food.name} - {self.time_serve}: {self.price}"
+
 
 
 class Menu(models.Model):

@@ -2,7 +2,6 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.db import transaction, IntegrityError
 from django.db.models import Q, Prefetch
-
 from rest_framework import viewsets, generics, mixins, status, permissions
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -17,7 +16,7 @@ from .models import (
     Order, OrderDetail, Food, FoodCategory, FoodReview,
     RestaurantReview, Restaurant, FoodPrice, Follow,
     Favorite, Cart, SubCart, SubCartItem, Payment,
-    User, Address, Menu
+    User, Address, Menu, TIME_SERVE_CHOICES
 )
 
 from .serializers import (
@@ -166,19 +165,30 @@ class OrderDetailViewSet(viewsets.ModelViewSet):
     serializer_class = OrderDetailSerializer
 
 
-class FoodPriceViewSet(viewsets.ModelViewSet):
-    queryset = FoodPrice.objects.select_related('food')
-    serializer_class = FoodPriceSerializer
+# class FoodPriceViewSet(viewsets.ModelViewSet):
+#     queryset = FoodPrice.objects.select_related('food')
+#     serializer_class = FoodPriceSerializer
+#
+#     def partial_update(self, request, *args, **kwargs):
+#         if set(request.data.keys()) != {"price"}:
+#             raise ValidationError({"detail": "Chỉ được phép cập nhật trường 'price'."})
+#
+#         instance = self.get_object()
+#         serializer = self.get_serializer(instance, data=request.data, partial=True)
+#         serializer.is_valid(raise_exception=True)
+#         self.perform_update(serializer)
+#         return Response(serializer.data)
 
-    def partial_update(self, request, *args, **kwargs):
-        if set(request.data.keys()) != {"price"}:
-            raise ValidationError({"detail": "Chỉ được phép cập nhật trường 'price'."})
 
-        instance = self.get_object()
-        serializer = self.get_serializer(instance, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
-        return Response(serializer.data)
+from django.db.models import Q, Prefetch
+from django.shortcuts import get_object_or_404
+from rest_framework import viewsets, generics, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, AllowAny
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIView):
@@ -186,82 +196,258 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
     pagination_class = FoodPagination
 
     def get_permissions(self):
-        if self.action in ['create', 'update', 'destroy']:
+        if self.action in ['create', 'update', 'partial_update', 'destroy', 'add_price', 'update_price', 'delete_price']:
             return [IsAuthenticated(), IsRestaurantOwner()]
         return [AllowAny()]
 
     def get_queryset(self):
-        queryset = Food.objects.prefetch_related('menus__restaurant').all().order_by('id')  # Sắp xếp để tránh cảnh báo phân trang
+        queryset = Food.objects.select_related(
+            'food_category',
+            'restaurant',
+            'restaurant__owner'
+        ).prefetch_related(
+            Prefetch('prices', queryset=FoodPrice.objects.all())
+        ).all().order_by('id')
+        return self._apply_filters(queryset)
 
-        search = self.request.query_params.get('search')
+    def _apply_filters(self, queryset):
+        params = self.request.query_params
+        search = params.get('search')
         if search:
             queryset = queryset.filter(
                 Q(name__icontains=search) |
-                Q(menus__restaurant__name__icontains=search)
-            ).distinct()
-
-        name = self.request.query_params.get('name')
-        if name:
-            queryset = queryset.filter(name__icontains=name)
-
-        price_min = self.request.query_params.get('price_min')
-        price_max = self.request.query_params.get('price_max')
-
-        if price_min or price_max:
-            food_prices = FoodPrice.objects.all()
-            if price_min:
-                food_prices = food_prices.filter(price__gte=price_min)
-            if price_max:
-                food_prices = food_prices.filter(price__lte=price_max)
-            queryset = queryset.filter(id__in=food_prices.values('food_id')).distinct()
-
-        food_category = self.request.query_params.get('food_category')
+                Q(restaurant__name__icontains=search)
+            )
+        food_category = params.get('food_category')
         if food_category:
             queryset = queryset.filter(food_category__name__icontains=food_category)
-
-        category_id = self.request.query_params.get('category_id')
+        category_id = params.get('category_id')
         if category_id:
-            queryset = queryset.filter(food_category_id=category_id)
-
-        restaurant_id = self.request.query_params.get('restaurant_id')
+            try:
+                queryset = queryset.filter(food_category_id=int(category_id))
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid category_id: {category_id}")
+        restaurant_id = params.get('restaurant_id')
         if restaurant_id:
-            queryset = queryset.filter(menus__restaurant_id=restaurant_id)
-
-        restaurant_name = self.request.query_params.get('restaurant_name')
-        if restaurant_name:
-            queryset = queryset.filter(menus__restaurant__name__icontains=restaurant_name)
-
+            try:
+                queryset = queryset.filter(restaurant_id=int(restaurant_id))
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid restaurant_id: {restaurant_id}")
+        price_min = params.get('price_min')
+        price_max = params.get('price_max')
+        if price_min or price_max:
+            queryset = self._filter_by_price_range(queryset, price_min, price_max)
         return queryset
 
     def create(self, request):
-        serializer = FoodSerializers(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        # Loại bỏ trường prices nếu có trong dữ liệu để tránh lỗi validation
+        data = request.data.copy()
+        if 'prices' in data:
+            data.pop('prices')
+
+        serializer = self.get_serializer(data=data)
+        if not serializer.is_valid():
+            logger.error(f"Food validation failed: {serializer.errors}")
+            return Response({"error": "Dữ liệu không hợp lệ", "details": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        restaurant_id = serializer.validated_data['restaurant'].id
+        restaurant = get_object_or_404(Restaurant, id=restaurant_id)
+        try:
+            with transaction.atomic():
+                food = serializer.save()
+            logger.info(f"Created food: {food.id} - {food.name}")
+            return Response(self.get_serializer(food).data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            logger.error(f"Error creating food: {str(e)}")
+            return Response(
+                {"error": "Lỗi khi tạo món ăn.", "detail": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     def update(self, request, pk=None):
-        food = self.get_object()
-        serializer = FoodSerializers(food, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        food = get_object_or_404(Food, pk=pk)
+        serializer = self.get_serializer(food, data=request.data)
+        if not serializer.is_valid():
+            logger.error(f"Food validation errors: {serializer.errors}")
+            return Response({"error": "Dữ liệu không hợp lệ", "details": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            with transaction.atomic():
+                food = serializer.save()
+            logger.info(f"Updated food: {food.id} - {food.name}")
+            return Response(self.get_serializer(food).data)
+        except Exception as e:
+            logger.error(f"Error updating food {pk}: {str(e)}")
+            return Response(
+                {"error": "Lỗi cập nhật món ăn.", "detail": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def partial_update(self, request, pk=None):
+        food = get_object_or_404(Food, pk=pk)
+        serializer = self.get_serializer(food, data=request.data, partial=True)
+        if not serializer.is_valid():
+            logger.error(f"Food validation errors: {serializer.errors}")
+            return Response({"error": "Dữ liệu không hợp lệ", "details": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            with transaction.atomic():
+                food = serializer.save()
+            logger.info(f"Partially updated food: {food.id} - {food.name}")
+            return Response(self.get_serializer(food).data)
+        except Exception as e:
+            logger.error(f"Error partially updating food {pk}: {str(e)}")
+            return Response(
+                {"error": "Lỗi cập nhật món ăn.", "detail": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     def destroy(self, request, pk=None):
-        food = self.get_object()
+        food = get_object_or_404(Food, pk=pk)
+        if not self._check_restaurant_ownership(food, request.user):
+            return Response(
+                {"error": "Bạn chỉ có thể xóa món ăn của nhà hàng mình."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        food_name = food.name
         food.delete()
-        return Response({"message": "Món ăn đã bị xóa thành công."}, status=status.HTTP_204_NO_CONTENT)
+        logger.info(f"Deleted food: {pk} - {food_name}")
+        return Response(
+            {"message": "Món ăn đã được xóa thành công."},
+            status=status.HTTP_204_NO_CONTENT
+        )
 
     @action(detail=True, methods=['get'])
     def reviews(self, request, pk=None):
+        food = get_object_or_404(Food, pk=pk)
+        reviews = FoodReview.objects.filter(
+            order_detail__food=food,
+            parent=None
+        ).select_related(
+            'user',
+            'order_detail'
+        ).prefetch_related(
+            'replies'
+        ).order_by('-created_at')
+        serializer = FoodReviewSerializers(reviews, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def popular(self, request):
+        queryset = self.get_queryset()[:10]
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def add_price(self, request, pk=None):
+        food = get_object_or_404(Food, pk=pk)
+        serializer = FoodPriceSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({"error": "Dữ liệu giá không hợp lệ", "details": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+        if food.prices.filter(time_serve=serializer.validated_data['time_serve']).exists():
+            return Response(
+                {"error": "Thời gian phục vụ này đã có giá."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         try:
-            food = Food.objects.get(pk=pk)
-            food_reviews = FoodReview.objects.filter(order_detail__food=food, parent=None)
-            serializer = FoodReviewSerializers(food_reviews, many=True)
-            return Response(serializer.data)
-        except Food.DoesNotExist:
-            return Response({"error": "Food not found"}, status=status.HTTP_404_NOT_FOUND)
+            food_price = serializer.save(food=food)
+            logger.info(f"Added price for food {pk}: {food_price.time_serve} - {food_price.price}")
+            return Response({
+                "message": "Thêm giá thành công.",
+                "price": {
+                    "id": food_price.id,
+                    "time_serve": food_price.time_serve,
+                    "price": food_price.price
+                }
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            logger.error(f"Error adding price for food {pk}: {str(e)}")
+            return Response(
+                {"error": "Lỗi thêm giá.", "detail": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['put', 'patch'])
+    def update_price(self, request, pk=None):
+        food = get_object_or_404(Food, pk=pk)
+        if not self._check_restaurant_ownership(food, request.user):
+            return Response(
+                {"error": "Bạn chỉ có thể cập nhật giá cho món ăn của nhà hàng mình."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        time_serve = request.data.get('time_serve')
+        if not time_serve:
+            return Response(
+                {"error": "Cần cung cấp thời gian phục vụ."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            food_price = get_object_or_404(FoodPrice, food=food, time_serve=time_serve)
+            serializer = FoodPriceSerializer(food_price, data=request.data, partial=True)
+            if not serializer.is_valid():
+                return Response({"error": "Dữ liệu giá không hợp lệ", "details": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+            serializer.save()
+            logger.info(f"Updated price for food {pk}: {time_serve} - {food_price.price}")
+            return Response({
+                "message": "Cập nhật giá thành công.",
+                "price": {
+                    "id": food_price.id,
+                    "time_serve": food_price.time_serve,
+                    "price": food_price.price
+                }
+            })
+        except FoodPrice.DoesNotExist:
+            return Response(
+                {"error": "Không tìm thấy giá cho thời gian phục vụ này."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error updating price for food {pk}: {str(e)}")
+            return Response(
+                {"error": "Lỗi cập nhật giá.", "detail": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['delete'])
+    def delete_price(self, request, pk=None):
+        food = get_object_or_404(Food, pk=pk)
+        if not self._check_restaurant_ownership(food, request.user):
+            return Response(
+                {"error": "Bạn chỉ có thể xóa giá cho món ăn của nhà hàng mình."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        time_serve = request.query_params.get('time_serve')
+        if not time_serve:
+            return Response(
+                {"error": "Cần cung cấp thời gian phục vụ để xóa."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            food_price = get_object_or_404(FoodPrice, food=food, time_serve=time_serve)
+            if food.prices.count() <= 1:
+                return Response(
+                    {"error": "Không thể xóa giá cuối cùng. Món ăn phải có ít nhất một mức giá."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            food_price.delete()
+            logger.info(f"Deleted price for food {pk}: {time_serve}")
+            return Response(
+                {"message": "Xóa giá thành công."},
+                status=status.HTTP_204_NO_CONTENT
+            )
+        except FoodPrice.DoesNotExist:
+            return Response(
+                {"error": "Không tìm thấy giá cho thời gian phục vụ này."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error deleting price for food {pk}: {str(e)}")
+            return Response(
+                {"error": "Lỗi xóa giá.", "detail": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class FoodCategoryViewSet(viewsets.ModelViewSet):

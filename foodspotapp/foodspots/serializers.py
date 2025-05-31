@@ -1,10 +1,11 @@
 from rest_framework.serializers import ModelSerializer
 from rest_framework.fields import SerializerMethodField
 from .models import (Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview,
-                     FoodPrice, Follow, Favorite, User, Address, Restaurant, Cart, SubCart, SubCartItem, Menu)
+                     FoodPrice, Follow, Favorite, User, Address, Restaurant, Cart, SubCart, SubCartItem, Menu, TIME_SERVE_CHOICES)
 from rest_framework import serializers
 from cloudinary.uploader import upload
-
+from collections import defaultdict
+import re
 
 class BaseSerializer(ModelSerializer):
     image = SerializerMethodField()
@@ -176,17 +177,28 @@ class FoodCategorySerializer(BaseSerializer):
         model = FoodCategory
         fields = ['id', 'name']
 
-class FoodPriceSerializer(BaseSerializer):
+class FoodPriceSerializer(serializers.ModelSerializer):
     class Meta:
         model = FoodPrice
         fields = ['time_serve', 'price']
 
-class FoodSerializers(BaseSerializer):
-    prices = FoodPriceSerializer(many=True, read_only=True)
+    def validate_price(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Giá phải lớn hơn 0.")
+        return value
+
+    def validate_time_serve(self, value):
+        if value not in dict(TIME_SERVE_CHOICES):
+            raise serializers.ValidationError(f"Thời gian phục vụ không hợp lệ. Phải là một trong: {list(dict(TIME_SERVE_CHOICES).keys())}")
+        return value
+
+class FoodSerializers(serializers.ModelSerializer):
+    prices = FoodPriceSerializer(many=True, required=False)  # Thêm required=False
     restaurant_name = serializers.CharField(source="restaurant.name", read_only=True)
+
     class Meta:
         model = Food
-        fields = ["id", "name", "restaurant", "restaurant_name","image", "food_category",
+        fields = ["id", "name", "restaurant", "restaurant_name", "image", "food_category",
                   "prices", "description", "is_available", "star_rating"]
         extra_kwargs = {
             'name': {'required': True},
@@ -194,10 +206,44 @@ class FoodSerializers(BaseSerializer):
             'food_category': {'required': True},
         }
 
-    def validate_name(self, value):
-        if not value:
-            raise serializers.ValidationError("Tên món ăn là bắt buộc")
-        return value
+    def to_internal_value(self, data):
+        # Sao chép data vì MultiValueDict không thể sửa
+        data = data.copy()
+        prices = []
+        # Tìm các trường prices[i][field]
+        price_fields = defaultdict(dict)
+        for key, value in data.items():
+            match = re.match(r'prices\[(\d+)\]\[(\w+)\]', key)
+            if match:
+                index, field = match.groups()
+                price_fields[int(index)][field] = value
+        # Chuyển thành danh sách prices
+        for index in sorted(price_fields.keys()):
+            price = price_fields[index]
+            if 'time_serve' in price and 'price' in price:
+                prices.append({
+                    'time_serve': price['time_serve'],
+                    'price': int(price['price'])
+                })
+        if prices:
+            data['prices'] = prices
+        return super().to_internal_value(data)
+
+    def validate(self, data):
+        # Chỉ validate prices nếu có dữ liệu prices được gửi lên
+        prices = data.get('prices')
+        if prices is not None and len(prices) == 0:
+            raise serializers.ValidationError({"prices": "Nếu gửi prices thì phải có ít nhất 1 giá."})
+        return data
+
+    def create(self, validated_data):
+        prices_data = validated_data.pop('prices', [])  # Mặc định là list rỗng nếu không có
+        food = Food.objects.create(**validated_data)
+        # Chỉ tạo prices nếu có dữ liệu
+        for price_data in prices_data:
+            FoodPrice.objects.create(food=food, **price_data)
+        return food
+
 
 class OrderDetailSerializer(BaseSerializer):
     food = serializers.SerializerMethodField()
