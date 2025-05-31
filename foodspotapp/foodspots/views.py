@@ -283,6 +283,7 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
             )
 
     def partial_update(self, request, pk=None):
+        logger.info(f"Received PATCH request for food {pk} with data: {request.data}")
         food = get_object_or_404(Food, pk=pk)
         serializer = self.get_serializer(food, data=request.data, partial=True)
         if not serializer.is_valid():
@@ -292,9 +293,10 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
             with transaction.atomic():
                 food = serializer.save()
             logger.info(f"Partially updated food: {food.id} - {food.name}")
-            return Response(self.get_serializer(food).data)
+            serializer = self.get_serializer(food)  # Serialize lại để trả về
+            return Response(serializer.data)
         except Exception as e:
-            logger.error(f"Error partially updating food {pk}: {str(e)}")
+            logger.error(f"Error partially updating food {pk}: {str(e)}", exc_info=True)
             return Response(
                 {"error": "Lỗi cập nhật món ăn.", "detail": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -302,11 +304,6 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
 
     def destroy(self, request, pk=None):
         food = get_object_or_404(Food, pk=pk)
-        if not self._check_restaurant_ownership(food, request.user):
-            return Response(
-                {"error": "Bạn chỉ có thể xóa món ăn của nhà hàng mình."},
-                status=status.HTTP_403_FORBIDDEN
-            )
         food_name = food.name
         food.delete()
         logger.info(f"Deleted food: {pk} - {food_name}")

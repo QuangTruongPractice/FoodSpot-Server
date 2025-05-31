@@ -6,6 +6,10 @@ from rest_framework import serializers
 from cloudinary.uploader import upload
 from collections import defaultdict
 import re
+import time
+import io
+from PIL import Image
+from django.core.files.base import ContentFile
 
 class BaseSerializer(ModelSerializer):
     image = SerializerMethodField()
@@ -29,7 +33,7 @@ class BaseSerializer(ModelSerializer):
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
         return super().create(validated_data)
 
-    def compress_image(image_file):
+    def compress_image(self, image_file):
         img = Image.open(image_file)
         if img.mode != 'RGB':
             img = img.convert('RGB')
@@ -48,7 +52,7 @@ class BaseSerializer(ModelSerializer):
         if image_file:
             try:
                 # Nén ảnh trước khi upload
-                compressed_image = compress_image(image_file)
+                compressed_image = self.compress_image(image_file)
                 start_time = time.time()
                 upload_result = upload(compressed_image)
                 end_time = time.time()
@@ -59,6 +63,8 @@ class BaseSerializer(ModelSerializer):
         return super().update(instance, validated_data)
 
 class UserSerializer(BaseSerializer):
+    avatar = SerializerMethodField()  # Thay đổi để sử dụng SerializerMethodField
+
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone_number',
@@ -79,13 +85,11 @@ class UserSerializer(BaseSerializer):
             raise serializers.ValidationError("Username is required")
         return value
 
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        if instance.avatar:
-            data['avatar'] = instance.avatar.url
-        else:
-            data['avatar'] = None
-        return data
+    def get_avatar(self, obj):
+        """Custom method để lấy avatar URL"""
+        if hasattr(obj, 'avatar') and obj.avatar:
+            return obj.avatar.url
+        return None
 
 class AddressSerializer(BaseSerializer):
     class Meta:
@@ -102,10 +106,17 @@ class UserAddressSerializer(BaseSerializer):
 class RestaurantSerializer(BaseSerializer):
     owner = UserSerializer(read_only=True)
     address = AddressSerializer()
+    avatar = SerializerMethodField()  # Thêm để đảm bảo avatar restaurant cũng được xử lý
 
     class Meta:
         model = Restaurant
         fields = ['id', 'name', 'avatar', 'phone_number', 'owner', 'star_rating', 'shipping_fee_per_km', 'address']
+
+    def get_avatar(self, obj):
+        """Custom method để lấy restaurant avatar URL"""
+        if hasattr(obj, 'avatar') and obj.avatar:
+            return obj.avatar.url
+        return None
 
     def update(self, instance, validated_data):
         print("Validated data in serializer:", validated_data)  # Log để debug
@@ -157,7 +168,6 @@ class MenuSerializer(BaseSerializer):
 
 class FoodInMenuSerializer(BaseSerializer):
     price = serializers.SerializerMethodField()
-    image = serializers.SerializerMethodField()
 
     class Meta:
         model = Food
@@ -168,9 +178,6 @@ class FoodInMenuSerializer(BaseSerializer):
         time_serve = self.context.get('time_serve')
         price_obj = obj.prices.filter(time_serve=time_serve).first()
         return price_obj.price if price_obj else None
-
-    def get_image(self, obj):
-        return obj.image.url if obj.image else None
 
 class FoodCategorySerializer(BaseSerializer):
     class Meta:
@@ -192,13 +199,15 @@ class FoodPriceSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(f"Thời gian phục vụ không hợp lệ. Phải là một trong: {list(dict(TIME_SERVE_CHOICES).keys())}")
         return value
 
-class FoodSerializers(serializers.ModelSerializer):
-    prices = FoodPriceSerializer(many=True, required=False)  # Thêm required=False
+
+class FoodSerializers(BaseSerializer):
+    prices = FoodPriceSerializer(many=True, required=False)
     restaurant_name = serializers.CharField(source="restaurant.name", read_only=True)
+    food_category_name = serializers.CharField(source="food_category.name", read_only=True)
 
     class Meta:
         model = Food
-        fields = ["id", "name", "restaurant", "restaurant_name", "image", "food_category",
+        fields = ["id", "name", "restaurant", "restaurant_name", "image", "food_category", "food_category_name",
                   "prices", "description", "is_available", "star_rating"]
         extra_kwargs = {
             'name': {'required': True},
@@ -244,6 +253,21 @@ class FoodSerializers(serializers.ModelSerializer):
             FoodPrice.objects.create(food=food, **price_data)
         return food
 
+    def update(self, instance, validated_data):
+        prices_data = validated_data.pop('prices', None)
+
+        # Cập nhật các trường khác trước
+        instance = super().update(instance, validated_data)
+
+        # Cập nhật prices nếu có
+        if prices_data is not None:
+            # Xóa tất cả prices cũ
+            instance.prices.all().delete()
+            # Tạo lại prices mới
+            for price_data in prices_data:
+                FoodPrice.objects.create(food=instance, **price_data)
+
+        return instance
 
 class OrderDetailSerializer(BaseSerializer):
     food = serializers.SerializerMethodField()
@@ -277,6 +301,8 @@ class OrderSerializer(BaseSerializer):
 class FoodReviewSerializers(BaseSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
     avatar = serializers.SerializerMethodField()
+    replies = serializers.SerializerMethodField()  # Thêm replies field
+
     class Meta:
         model = FoodReview
         fields = ['id', 'user', 'user_name', 'avatar', 'order_detail', 'comment', 'created_date', 'star', 'replies']
