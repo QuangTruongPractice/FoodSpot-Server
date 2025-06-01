@@ -15,9 +15,22 @@ class BaseSerializer(ModelSerializer):
     image = SerializerMethodField()
 
     def get_image(self, obj):
+        """Trả về URL ảnh trực tiếp từ CloudinaryField"""
         if hasattr(obj, 'image') and obj.image:
-            return obj.image.url
+            return str(obj.image)  # CloudinaryField lưu URL dưới dạng chuỗi
         return None
+
+    def compress_image(self, image_file):
+        """Nén ảnh và trả về dữ liệu bytes thay vì ContentFile"""
+        img = Image.open(image_file)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        output = io.BytesIO()
+        img.thumbnail((600, 600))  # Giảm kích thước để tối ưu
+        img.save(output, format='JPEG', quality=75)  # Giảm chất lượng
+        output.seek(0)
+        # Trả về bytes trực tiếp thay vì ContentFile để tránh lỗi tuần tự hóa
+        return output.getvalue()
 
     def create(self, validated_data):
         request = self.context.get('request')
@@ -27,21 +40,13 @@ class BaseSerializer(ModelSerializer):
 
         if image_file:
             try:
-                upload_result = upload(image_file)
-                validated_data['image'] = upload_result['url']
+                # Nén ảnh và tải lên Cloudinary
+                compressed_image = self.compress_image(image_file)
+                upload_result = upload(compressed_image, resource_type="image")
+                validated_data['image'] = upload_result['secure_url']
             except Exception as e:
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
         return super().create(validated_data)
-
-    def compress_image(self, image_file):
-        img = Image.open(image_file)
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        output = io.BytesIO()
-        img.thumbnail((800, 800))  # Giảm kích thước ảnh
-        img.save(output, format='JPEG', quality=85)  # Nén chất lượng
-        output.seek(0)
-        return ContentFile(output.read(), name=image_file.name)
 
     def update(self, instance, validated_data):
         request = self.context.get('request')
@@ -51,15 +56,16 @@ class BaseSerializer(ModelSerializer):
 
         if image_file:
             try:
-                # Nén ảnh trước khi upload
                 compressed_image = self.compress_image(image_file)
-                start_time = time.time()
-                upload_result = upload(compressed_image)
-                end_time = time.time()
-                print(f"Cloudinary upload time: {end_time - start_time} seconds")
-                validated_data['image'] = upload_result['url']
+                upload_result = upload(compressed_image, resource_type="image")
+                validated_data['image'] = upload_result['secure_url']
             except Exception as e:
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
+        elif 'image' in validated_data and validated_data['image'] == '':
+            validated_data['image'] = None  # Xóa ảnh
+        elif 'image' not in validated_data:
+            validated_data['image'] = instance.image  # Giữ ảnh cũ
+
         return super().update(instance, validated_data)
 
 class UserSerializer(BaseSerializer):

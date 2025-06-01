@@ -1,5 +1,5 @@
 from rest_framework import permissions
-from .models import Order
+from .models import Order, OrderDetail
 
 class RestaurantOwner(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
@@ -10,10 +10,20 @@ class RestaurantOwner(permissions.BasePermission):
         return obj.owner == request.user
 
 class IsOrderOwner(permissions.BasePermission):
+    message = "You do not have permission to access this order."
+
+    def has_permission(self, request, view):
+        # Cho phép nếu người dùng là CUSTOMER hoặc RESTAURANT_USER
+        return request.user and request.user.is_authenticated and request.user.role in ['CUSTOMER', 'RESTAURANT_USER']
+
     def has_object_permission(self, request, view, obj):
         if isinstance(obj, Order):
             return obj.user == request.user or (
                     request.user.role == 'RESTAURANT_USER' and obj.restaurant.owner == request.user
+            )
+        elif isinstance(obj, OrderDetail):
+            return obj.order.user == request.user or (
+                    request.user.role == 'RESTAURANT_USER' and obj.order.restaurant.owner == request.user
             )
         return False
 
