@@ -44,6 +44,8 @@ class OrderViewSet(viewsets.ViewSet):
     pagination_class = OrderPagination
 
     def get_permissions(self):
+        if self.action in ['current_restaurant_orders', 'current_restaurant_order_details']:
+            return [IsAuthenticated(), IsRestaurantOwner()]
         return [IsAuthenticated(), IsOrderOwner()]
 
     def get_object(self):
@@ -59,23 +61,17 @@ class OrderViewSet(viewsets.ViewSet):
 
     def list(self, request, *args, **kwargs):
         orders = self.get_queryset()
-        # Áp dụng phân trang
         paginator = self.pagination_class()
         paginated_orders = paginator.paginate_queryset(orders, request)
-
         serializer = OrderSerializer(paginated_orders, many=True)
         return paginator.get_paginated_response(serializer.data)
 
     def retrieve(self, request, *args, **kwargs):
         order = self.get_object()
-
         class OrderDetailWithItemsSerializer(OrderSerializer):
             order_details = OrderDetailSerializer(many=True, read_only=True)
-
             class Meta(OrderSerializer.Meta):
                 fields = OrderSerializer.Meta.fields + ['order_details']
-
-        # Serialize và trả về chi tiết đơn hàng
         return Response(OrderDetailWithItemsSerializer(order).data)
 
     def create(self, request, *args, **kwargs):
@@ -88,82 +84,123 @@ class OrderViewSet(viewsets.ViewSet):
     def partial_update(self, request, *args, **kwargs):
         order = self.get_object()
         status = request.data.get('status')
-
         if not status:
             return Response({"error": "Chỉ được cập nhật trạng thái đơn hàng."}, status=status.HTTP_400_BAD_REQUEST)
-
         order.status = status
-        order.save()  # Lưu lại đối tượng order đã cập nhật
+        order.save()
         return Response(OrderSerializer(order).data)
 
     def destroy(self, request, *args, **kwargs):
         order = self.get_object()
-
-        # Kiểm tra quyền xóa đơn hàng
         if order.user != request.user and order.restaurant.owner != request.user:
             return Response({"detail": "Bạn không có quyền xóa đơn hàng này."}, status=status.HTTP_403_FORBIDDEN)
-
-        # Xóa đơn hàng
         order.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(methods=['post'], detail=False, url_path='checkout')
     def checkout(self, request):
-        # Lấy dữ liệu từ request.data
-        user = request.user
+        user = self.request.user
         sub_cart_id = request.data.get("sub_cart_id")
         payment_method = request.data.get("payment_method")
         ship_fee = float(request.data.get('ship_fee'))
-        total = float(request.data.get('total_price'))  # da bao gom phi ship
-        ship_address_id = int(request.data.get("ship_address_id"))  # dia chi nguoi dung
+        total = float(request.data.get('total_price'))
+        ship_address_id = int(request.data.get("ship_address_id"))
 
         sub_cart = get_object_or_404(SubCart, id=sub_cart_id)
-        print(sub_cart)
         ship_address = get_object_or_404(Address, id=ship_address_id)
-        print(ship_address)
         cart = sub_cart.cart
         quantity = 0
         try:
             with transaction.atomic():
-                order = Order.objects.create(user=user,
-                                             restaurant=sub_cart.restaurant,
-                                             address=ship_address,
-                                             shipping_fee=ship_fee,
-                                             total=total, )
-
-                Payment.objects.create(order=order,
-                                       total_payment=total,
-                                       payment_method=payment_method, )
-
+                order = Order.objects.create(
+                    user=user,
+                    restaurant=sub_cart.restaurant,
+                    address=ship_address,
+                    shipping_fee=ship_fee,
+                    total=total,
+                )
+                Payment.objects.create(
+                    order=order,
+                    total_payment=total,
+                    payment_method=payment_method,
+                )
                 for s in sub_cart.sub_cart_items.all():
-                    OrderDetail.objects.create(food=s.food,
-                                               order=order,
-                                               quantity=s.quantity,
-                                               sub_total=s.price,
-                                               time_serve=s.time_serve)
+                    OrderDetail.objects.create(
+                        food=s.food,
+                        order=order,
+                        quantity=s.quantity,
+                        sub_total=s.price,
+                        time_serve=s.time_serve
+                    )
                     quantity += s.quantity
-
                 sub_cart.delete()
                 cart.item_number -= quantity
-
                 cart.save()
                 if cart.item_number == 0:
                     cart.delete()
-
-                return Response({"message": "Đặt hàng thành công.",
-                                 "order_id": order.id}, status=status.HTTP_200_OK)
-
+                return Response({"message": "Đặt hàng thành công.", "order_id": order.id}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(methods=['get'], detail=False, url_path='current-restaurant-orders')
+    def current_restaurant_orders(self, request):
+        user = self.request.user
+        if user.role != 'RESTAURANT_USER':
+            return Response(
+                {"error": "Chỉ người dùng có vai trò RESTAURANT_USER mới có thể xem đơn hàng của nhà hàng."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        try:
+            restaurant = Restaurant.objects.get(owner=user)
+            orders = Order.objects.filter(restaurant=restaurant).order_by('-ordered_date', '-id')
+            paginator = self.pagination_class()
+            paginated_orders = paginator.paginate_queryset(orders, request)
+            serializer = OrderSerializer(paginated_orders, many=True, context={'request': request})
+            return paginator.get_paginated_response(serializer.data)
+        except Restaurant.DoesNotExist:
+            return Response(
+                {"error": "Người dùng này không sở hữu nhà hàng nào."},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
 class OrderDetailViewSet(viewsets.ModelViewSet):
     queryset = OrderDetail.objects.select_related('food')
     serializer_class = OrderDetailSerializer
+
     def get_permissions(self):
         return [IsAuthenticated(), IsOrderOwner()]
 
+    @action(methods=['get'], detail=False, url_path='by-order/(?P<order_id>\d+)')
+    def by_order(self, request, order_id=None):
+        """
+        Lấy tất cả OrderDetail theo ID của Order mà không sử dụng phân trang, hỗ trợ lọc theo food_id.
+        """
+        user = self.request.user
+        order = get_object_or_404(Order, pk=order_id)
 
+        # Kiểm tra quyền truy cập: người dùng phải là chủ đơn hàng hoặc chủ nhà hàng
+        if order.user != user and order.restaurant.owner != user:
+            logger.warning(f"User {user.id} does not have permission to view OrderDetails for order {order_id}")
+            return Response(
+                {"error": "Bạn không có quyền xem chi tiết đơn hàng này."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        order_details = OrderDetail.objects.filter(
+            order=order
+        ).select_related('food').order_by('-id')
+
+        # Lọc theo food_id
+        food_id = request.query_params.get('food_id')
+        if food_id:
+            try:
+                order_details = order_details.filter(food__id=int(food_id))
+            except ValueError:
+                return Response({"error": "food_id phải là một số nguyên."}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.serializer_class(order_details, many=True, context={'request': request})
+        logger.info(f"Retrieved {order_details.count()} OrderDetails for order {order_id}")
+        return Response(serializer.data, status=status.HTTP_200_OK)
 # class FoodPriceViewSet(viewsets.ModelViewSet):
 #     queryset = FoodPrice.objects.select_related('food')
 #     serializer_class = FoodPriceSerializer
