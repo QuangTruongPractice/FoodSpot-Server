@@ -153,7 +153,7 @@ class RestaurantAddressSerializer(BaseSerializer):
         model = Restaurant
         fields = ['id', 'name', 'address']
 
-class MenuSerializer(BaseSerializer):
+class MenuSerializer(ModelSerializer):
     foods = serializers.SerializerMethodField()
     restaurant = serializers.SlugRelatedField(slug_field='name', read_only=True)
 

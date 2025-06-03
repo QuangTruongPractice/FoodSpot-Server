@@ -1186,9 +1186,9 @@ class SubCartItemViewSet(viewsets.ViewSet):
 
 class MenuViewSet(viewsets.ViewSet):
     def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated()]
-        return [AllowAny()]
+        if self.action in ['create', 'update', 'partial_update', 'destroy', 'add_food_to_menu']:
+            return [permissions.IsAuthenticated(), RestaurantOwner()]
+        return [permissions.AllowAny()]
 
     def list(self, request):
         queryset = Menu.objects.all()
@@ -1204,19 +1204,39 @@ class MenuViewSet(viewsets.ViewSet):
             return Response({"error": "Menu not found"}, status=status.HTTP_404_NOT_FOUND)
 
     def create(self, request):
-        user = request.user
-        if user.role != 'RESTAURANT_USER':
-            return Response({"error": "Only restaurant users can create menus."}, status=status.HTTP_403_FORBIDDEN)
-
-        serializer = MenuSerializer(data=request.data, context={'request': request})
+        logger.info(f"Request data: {request.data}")
+        restaurant_id = request.data.get('restaurant')
+        if restaurant_id is None:
+            logger.error("Missing restaurant field in request data")
+            return Response(
+                {"restaurant": ["This field is required."]},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            restaurant_id = int(restaurant_id)
+        except (ValueError, TypeError):
+            logger.error(f"Invalid restaurant ID: {restaurant_id}")
+            return Response(
+                {"restaurant": ["Invalid restaurant ID. Must be an integer."]},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        restaurant = get_object_or_404(Restaurant, id=restaurant_id)
+        logger.info(f"Found restaurant: {restaurant.id} - {restaurant.name}")
+        data = request.data.copy()
+        data.pop('restaurant', None)
+        serializer = MenuSerializer(data=data)
         if serializer.is_valid():
-            menu = serializer.save()
-            # Kiểm tra xem nhà hàng có thuộc về user không
-            if menu.restaurant.owner != user:
-                menu.delete()
-                return Response({"error": "You can only create menus for your own restaurant."}, status=status.HTTP_403_FORBIDDEN)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            self.perform_create(serializer, restaurant=restaurant)
+            logger.info(f"Created menu: {serializer.data.get('name')}")
+            return Response(serializer.data, status=status.HTTP_201_CREATED)  # Bỏ headers
+        logger.error(f"Serializer errors: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def perform_create(self, serializer, restaurant=None):
+        if restaurant is None:
+            logger.error("Restaurant is None in perform_create")
+            raise ValueError("Restaurant cannot be None")
+        serializer.save(restaurant=restaurant)
 
     def update(self, request, pk=None):
         user = request.user
@@ -1236,6 +1256,31 @@ class MenuViewSet(viewsets.ViewSet):
         except Menu.DoesNotExist:
             return Response({"error": "Menu not found"}, status=status.HTTP_404_NOT_FOUND)
 
+    def patch(self, request, pk=None):
+        user = request.user
+        if user.role != 'RESTAURANT_USER':
+            return Response({"error": "Chỉ người dùng nhà hàng mới có thể cập nhật menu."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            menu = Menu.objects.get(pk=pk)
+            if menu.restaurant.owner != user:
+                return Response({"error": "Bạn chỉ có thể cập nhật menu của nhà hàng của mình."}, status=status.HTTP_403_FORBIDDEN)
+
+            serializer = MenuSerializer(menu, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                logger.info(f"Menu {pk} được cập nhật bởi người dùng {user.id}")
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Menu.DoesNotExist:
+            return Response({"error": "Không tìm thấy menu."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"Lỗi khi cập nhật menu {pk}: {str(e)}")
+            return Response(
+                {"error": "Đã xảy ra lỗi khi cập nhật menu.", "detail": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
     def destroy(self, request, pk=None):
         user = request.user
         if user.role != 'RESTAURANT_USER':
@@ -1250,6 +1295,75 @@ class MenuViewSet(viewsets.ViewSet):
             return Response({"message": "Menu deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
         except Menu.DoesNotExist:
             return Response({"error": "Menu not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=['post'], url_path='add-food')
+    def add_food_to_menu(self, request, pk=None):
+        user = request.user
+        try:
+            menu = Menu.objects.get(pk=pk)
+            # Kiểm tra xem người dùng có sở hữu nhà hàng liên quan đến menu không
+            if menu.restaurant.owner != user:
+                return Response(
+                    {"error": "Bạn chỉ có thể thêm món ăn vào menu của nhà hàng của mình."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            food_id = request.data.get('food_id')
+            if not food_id:
+                return Response(
+                    {"error": "Cần cung cấp food_id."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            food = get_object_or_404(Food, pk=food_id)
+            # Kiểm tra xem món ăn có thuộc về cùng nhà hàng với menu không
+            if food.restaurant != menu.restaurant:
+                return Response(
+                    {"error": "Món ăn phải thuộc về cùng nhà hàng với menu."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Thêm món ăn vào menu
+            menu.foods.add(food)
+            logger.info(f"Đã thêm món ăn {food_id} vào menu {pk} bởi người dùng {user.id}")
+            return Response(
+                {"message": f"Món ăn {food.name} đã được thêm vào menu {menu.name} thành công."},
+                status=status.HTTP_200_OK
+            )
+
+        except Menu.DoesNotExist:
+            return Response(
+                {"error": "Không tìm thấy menu."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Lỗi khi thêm món ăn vào menu {pk}: {str(e)}")
+            return Response(
+                {"error": "Đã xảy ra lỗi khi thêm món ăn vào menu.", "detail": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['get'], url_path='foods')
+    def get_menu_foods(self, request, pk=None):
+        try:
+            menu = get_object_or_404(Menu, pk=pk)
+            foods = menu.foods.all().select_related('food_category', 'restaurant').prefetch_related('prices').order_by('id')
+            paginator = FoodPagination()
+            result_page = paginator.paginate_queryset(foods, request)
+            serializer = FoodSerializers(result_page, many=True, context={'request': request})
+            logger.info(f"Retrieved {foods.count()} foods for menu {pk}")
+            return paginator.get_paginated_response(serializer.data)
+        except Menu.DoesNotExist:
+            logger.warning(f"Menu {pk} not found")
+            return Response({"error": "Menu not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"Error retrieving foods for menu {pk}: {str(e)}")
+            return Response(
+                {"error": "Error retrieving menu foods", "detail": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
 
 class AddItemToCart(APIView):
     permission_classes = [permissions.IsAuthenticated]
