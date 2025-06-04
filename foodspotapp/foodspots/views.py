@@ -1,7 +1,7 @@
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.db import transaction, IntegrityError
-from django.db.models import Q, Prefetch
+from django.db.models import Q, Prefetch, Sum, Count
 
 from rest_framework import viewsets, generics, mixins, status, permissions
 from rest_framework.views import APIView
@@ -37,6 +37,10 @@ from .paginators import (
     FoodPagination, OrderPagination, ReviewPagination,
 )
 
+from datetime import datetime, date
+from calendar import monthrange
+import re
+
 def index(request):
     return HttpResponse("foodspots")
 
@@ -45,6 +49,8 @@ class OrderViewSet(viewsets.ViewSet):
     pagination_class = OrderPagination
 
     def get_permissions(self):
+        if self.action in ['current_restaurant_orders', 'current_restaurant_order_details']:
+            return [IsAuthenticated(), IsRestaurantOwner()]
         return [IsAuthenticated(), IsOrderOwner()]
 
     def get_object(self):
@@ -97,17 +103,6 @@ class OrderViewSet(viewsets.ViewSet):
         order.save()  # Lưu lại đối tượng order đã cập nhật
         return Response(OrderSerializer(order).data)
 
-    def destroy(self, request, *args, **kwargs):
-        order = self.get_object()
-
-        # Kiểm tra quyền xóa đơn hàng
-        if order.user != request.user and order.restaurant.owner != request.user:
-            return Response({"detail": "Bạn không có quyền xóa đơn hàng này."}, status=status.HTTP_403_FORBIDDEN)
-
-        # Xóa đơn hàng
-        order.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
     @action(methods=['post'], detail=False, url_path='checkout')
     def checkout(self, request):
         # Lấy dữ liệu từ request.data
@@ -157,13 +152,67 @@ class OrderViewSet(viewsets.ViewSet):
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(methods=['get'], detail=False, url_path='current-restaurant-orders')
+    def current_restaurant_orders(self, request):
+        user = self.request.user
+        if user.role != 'RESTAURANT_USER':
+            return Response(
+                {"error": "Chỉ người dùng có vai trò RESTAURANT_USER mới có thể xem đơn hàng của nhà hàng."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        try:
+            restaurant = Restaurant.objects.get(owner=user)
+            orders = Order.objects.filter(restaurant=restaurant).order_by('-ordered_date', '-id')
+            paginator = self.pagination_class()
+            paginated_orders = paginator.paginate_queryset(orders, request)
+            serializer = OrderSerializer(paginated_orders, many=True, context={'request': request})
+            return paginator.get_paginated_response(serializer.data)
 
-class OrderDetailViewSet(viewsets.ModelViewSet):
-    queryset = OrderDetail.objects.select_related('food')
+        except Restaurant.DoesNotExist:
+            return Response(
+                {"error": "Người dùng này không sở hữu nhà hàng nào."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class OrderDetailViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIView):
+    queryset = OrderDetail.objects.select_related('food').all()
     serializer_class = OrderDetailSerializer
-    def get_permissions(self):
-        return [IsAuthenticated(), IsOrderOwner()]
+    permission_classes = [IsAuthenticated, IsOrderOwner]
 
+    @action(methods=['get'], detail=False, url_path='by-order/(?P<order_id>\d+)')
+    def by_order(self, request, order_id=None):
+        """
+        Lấy tất cả OrderDetail theo ID của Order mà không sử dụng phân trang, hỗ trợ lọc theo food_id.
+        """
+        user = self.request.user
+        order = get_object_or_404(Order, pk=order_id)
+
+        # Kiểm tra quyền truy cập: người dùng phải là chủ đơn hàng hoặc chủ nhà hàng
+        if order.user != user and order.restaurant.owner != user:
+            logger.warning(f"User {user.id} does not have permission to view OrderDetails for order {order_id}")
+            return Response(
+                {"error": "Bạn không có quyền xem chi tiết đơn hàng này."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        order_details = OrderDetail.objects.filter(
+            order=order
+        ).select_related('food').order_by('-id')
+
+        # Lọc theo food_id
+        food_id = request.query_params.get('food_id')
+        if food_id:
+            try:
+                order_details = order_details.filter(food__id=int(food_id))
+            except ValueError:
+                return Response({"error": "food_id phải là một số nguyên."}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.serializer_class(order_details, many=True, context={'request': request})
+        logger.info(f"Retrieved {order_details.count()} OrderDetails for order {order_id}")
+        Add
+        commentMore
+        actions
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 class FoodPriceViewSet(viewsets.ModelViewSet):
     queryset = FoodPrice.objects.select_related('food')
@@ -648,7 +697,7 @@ class UserAddressViewSet(viewsets.ViewSet):
         user.addresses.remove(address)
         if not address.users.exists() and not address.restaurants.exists():
             address.delete()  # Chỉ xóa nếu không có người dùng hoặc nhà hàng nào khác tham chiếu
-        return Response({"message": "Địa chỉ đã được xóa thành công."}, status=status.HTTP_204_NO_CONTENT)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 class RestaurantViewSet(viewsets.ViewSet):
     def get_permissions(self):
@@ -1170,17 +1219,16 @@ class MomoPayment(APIView):
             partnerCode = "MOMO"
             accessKey = "F8BBA842ECF85"
             secretKey = "K951B6PE1waDMi640xX08PD3vg6EkVlz"
-            redirectUrl = "https://webhook.site/b3088a6a-2d17-4f8d-a383-71389a6c600b"
-            ipnUrl = "https://webhook.site/b3088a6a-2d17-4f8d-a383-71389a6c600b"
+            redirectUrl = 'foodspot://cart'
+            ipnUrl = "https://9a39-2405-4802-9111-2a0-1592-a9fa-2a78-cacc.ngrok-free.app/momo-callback/"
 
             # Tham số từ người dùng
             amount = str(request.data.get('amount'))
             orderInfo = request.data.get('orderInfo', 'pay with MoMo')
-            order_id = request.data.get('order_id')  #Lấy order_id từ client
             orderId = str(uuid.uuid4())
             requestId = str(uuid.uuid4())
             requestType = "captureWallet"
-            extraData = ""
+            extraData = request.data.get('order_id')
 
             # Tạo chữ ký
             raw_signature = f"accessKey={accessKey}&amount={amount}&extraData={extraData}&ipnUrl={ipnUrl}" \
@@ -1209,14 +1257,36 @@ class MomoPayment(APIView):
             # Gửi yêu cầu đến MoMo
             response = requests.post(endpoint, json=data, headers={'Content-Type': 'application/json'})
             momo_response = response.json()
-
-            # Giả sử thanh toán thành công => cập nhật trạng thái thanh toán
-            if momo_response.get('resultCode') == 0:
-                payment = Payment.objects.get(order_id=order_id)
-                payment.status = 'SUCCESS'  # nhớ cập nhật field status trong model Payment
-                payment.save()
+            print(momo_response)
 
             return Response(momo_response, status=response.status_code)
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class MomoCallback(APIView):
+    permission_classes = [AllowAny]
+    def post(self, request):
+        print("CAllBack:::")
+        try:
+            data = request.data
+            print("Dữ liệu từ MoMo gửi về:", data)
+            # Xử lý kết quả thanh toán
+            order_id = data.get('extraData')
+            print(order_id)
+            result_code = data.get('resultCode')
+
+            try:
+                payment = Payment.objects.get(order_id=order_id)
+                if result_code == 0:
+                    payment.status = 'SUCCESS'
+                else:
+                    payment.status = 'FAIL'
+                payment.save()
+            except Payment.DoesNotExist:
+                return Response({'message': 'Order not found'}, status=404)
+
+            return Response({'message': 'Callback received successfully'}, status=200)
 
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -1235,3 +1305,420 @@ class CheckOrdered(APIView):
             )
         has_ordered = Order.objects.filter(user=request.user, restaurant_id=restaurant_id).exists()
         return Response({"has_ordered": has_ordered})
+
+class RestaurantRevenueStatisticsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def parse_period(self, period_str):
+        period_str = period_str.strip()
+
+        # Match month/year format (5/2025, 05/2025)
+        month_year_pattern = r'^(\d{1,2})/(\d{4})$'
+        match = re.match(month_year_pattern, period_str)
+        if match:
+            month = int(match.group(1))
+            year = int(match.group(2))
+            if not (1 <= month <= 12):
+                raise ValidationError("Month must be between 1 and 12")
+
+            start_date = date(year, month, 1)
+            _, last_day = monthrange(year, month)
+            end_date = date(year, month, last_day)
+            return start_date, end_date, f"Tháng {month}/{year}"
+
+        # Match quarter format (Q1 2025, q1 2025)
+        quarter_pattern = r'^[Qq]([1-4])\s+(\d{4})$'
+        match = re.match(quarter_pattern, period_str)
+        if match:
+            quarter = int(match.group(1))
+            year = int(match.group(2))
+
+            quarter_months = {
+                1: (1, 3),   # Q1: Jan-Mar
+                2: (4, 6),   # Q2: Apr-Jun
+                3: (7, 9),   # Q3: Jul-Sep
+                4: (10, 12)  # Q4: Oct-Dec
+            }
+
+            start_month, end_month = quarter_months[quarter]
+            start_date = date(year, start_month, 1)
+            _, last_day = monthrange(year, end_month)
+            end_date = date(year, end_month, last_day)
+            return start_date, end_date, f"Quý {quarter}/{year}"
+
+        # Match year format (2025)
+        year_pattern = r'^(\d{4})$'
+        match = re.match(year_pattern, period_str)
+        if match:
+            year = int(match.group(1))
+            start_date = date(year, 1, 1)
+            end_date = date(year, 12, 31)
+            return start_date, end_date, f"Năm {year}"
+
+        raise ValidationError("Invalid period format. Use formats like '5/2025', 'Q1 2025', or '2025'")
+
+    def get_restaurant(self, restaurant_id):
+        try:
+            return Restaurant.objects.get(id=restaurant_id)
+        except Restaurant.DoesNotExist:
+            return None
+
+    def get_order_details(self, restaurant, start_date, end_date):
+        return OrderDetail.objects.filter(
+            order__restaurant=restaurant,
+            order__ordered_date__gte=start_date,
+            order__ordered_date__lte=end_date,
+            order__status__in=['ACCEPTED', 'DELIVERED']  # Only successful orders
+        ).select_related('food', 'food__food_category', 'order')
+
+
+class FoodRevenueStatisticsView(RestaurantRevenueStatisticsView):
+
+    def get(self, request, restaurant_id):
+        try:
+            # Validate restaurant exists
+            restaurant = self.get_restaurant(restaurant_id)
+            if not restaurant:
+                return Response({
+                    'error': 'Restaurant not found'
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # Check if user has permission to view this restaurant's data
+            if (request.user.role == 'RESTAURANT_USER' and
+                    hasattr(request.user, 'restaurants') and
+                    request.user.restaurants.id != restaurant.id):
+                return Response({
+                    'error': 'Permission denied'
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Get period parameter
+            period = request.query_params.get('period')
+            if not period:
+                return Response({
+                    'error': 'Period parameter is required'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                start_date, end_date, period_display = self.parse_period(period)
+            except ValidationError as e:
+                return Response({
+                    'error': str(e)
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Get order details for the restaurant in the specified period
+            order_details = self.get_order_details(restaurant, start_date, end_date)
+
+            # Group by food and calculate revenue
+            food_stats = {}
+            for detail in order_details:
+                food_id = detail.food.id
+                if food_id not in food_stats:
+                    food_stats[food_id] = {
+                        'food_id': food_id,
+                        'food_name': detail.food.name,
+                        'category': detail.food.food_category.name,
+                        'total_quantity': 0,
+                        'total_revenue': 0,
+                        'order_count': set(),
+                        'avg_price': 0
+                    }
+
+                food_stats[food_id]['total_quantity'] += detail.quantity
+                food_stats[food_id]['total_revenue'] += detail.sub_total
+                food_stats[food_id]['order_count'].add(detail.order.id)
+
+            # Convert sets to counts and calculate averages
+            food_revenue_list = []
+            for stats in food_stats.values():
+                stats['order_count'] = len(stats['order_count'])
+                stats['avg_price'] = round(stats['total_revenue'] / stats['total_quantity'], 2) if stats['total_quantity'] > 0 else 0
+                stats['total_revenue'] = round(stats['total_revenue'], 2)
+                food_revenue_list.append(stats)
+
+            # Sort by total revenue (descending)
+            food_revenue_list.sort(key=lambda x: x['total_revenue'], reverse=True)
+
+            # Calculate totals
+            total_revenue = sum(item['total_revenue'] for item in food_revenue_list)
+            total_quantity = sum(item['total_quantity'] for item in food_revenue_list)
+            total_orders = len(set(detail.order.id for detail in order_details))
+
+            return Response({
+                'success': True,
+                'data': {
+                    'restaurant_id': restaurant_id,
+                    'restaurant_name': restaurant.name,
+                    'period': period_display,
+                    'period_range': {
+                        'start_date': start_date.strftime('%Y-%m-%d'),
+                        'end_date': end_date.strftime('%Y-%m-%d')
+                    },
+                    'summary': {
+                        'total_revenue': round(total_revenue, 2),
+                        'total_quantity': total_quantity,
+                        'total_orders': total_orders,
+                        'total_foods': len(food_revenue_list),
+                        'avg_order_value': round(total_revenue / total_orders, 2) if total_orders > 0 else 0
+                    },
+                    'food_revenue': food_revenue_list
+                }
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                'error': f'An error occurred: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class CategoryRevenueStatisticsView(RestaurantRevenueStatisticsView):
+    def get(self, request, restaurant_id):
+        try:
+            # Validate restaurant exists
+            restaurant = self.get_restaurant(restaurant_id)
+            if not restaurant:
+                return Response({
+                    'error': 'Restaurant not found'
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # Check if user has permission to view this restaurant's data
+            if (request.user.role == 'RESTAURANT_USER' and
+                    hasattr(request.user, 'restaurants') and
+                    request.user.restaurants.id != restaurant.id):
+                return Response({
+                    'error': 'Permission denied'
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Get period parameter
+            period = request.query_params.get('period')
+            if not period:
+                return Response({
+                    'error': 'Period parameter is required'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                start_date, end_date, period_display = self.parse_period(period)
+            except ValidationError as e:
+                return Response({
+                    'error': str(e)
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Get order details for the restaurant in the specified period
+            order_details = self.get_order_details(restaurant, start_date, end_date)
+
+            # Group by category and calculate revenue
+            category_stats = {}
+            for detail in order_details:
+                category_id = detail.food.food_category.id
+                category_name = detail.food.food_category.name
+
+                if category_id not in category_stats:
+                    category_stats[category_id] = {
+                        'category_id': category_id,
+                        'category_name': category_name,
+                        'total_quantity': 0,
+                        'total_revenue': 0,
+                        'food_count': set(),
+                        'order_count': set(),
+                        'foods': {}
+                    }
+
+                category_stats[category_id]['total_quantity'] += detail.quantity
+                category_stats[category_id]['total_revenue'] += detail.sub_total
+                category_stats[category_id]['food_count'].add(detail.food.id)
+                category_stats[category_id]['order_count'].add(detail.order.id)
+
+                # Track individual food performance within category
+                food_id = detail.food.id
+                if food_id not in category_stats[category_id]['foods']:
+                    category_stats[category_id]['foods'][food_id] = {
+                        'food_id': food_id,
+                        'food_name': detail.food.name,
+                        'quantity': 0,
+                        'revenue': 0
+                    }
+
+                category_stats[category_id]['foods'][food_id]['quantity'] += detail.quantity
+                category_stats[category_id]['foods'][food_id]['revenue'] += detail.sub_total
+
+            # Convert sets to counts and prepare final data
+            category_revenue_list = []
+            for stats in category_stats.values():
+                stats['food_count'] = len(stats['food_count'])
+                stats['order_count'] = len(stats['order_count'])
+                stats['avg_revenue_per_food'] = round(stats['total_revenue'] / stats['food_count'], 2) if stats['food_count'] > 0 else 0
+                stats['total_revenue'] = round(stats['total_revenue'], 2)
+
+                # Convert foods dict to list and sort by revenue
+                foods_list = list(stats['foods'].values())
+                for food in foods_list:
+                    food['revenue'] = round(food['revenue'], 2)
+                foods_list.sort(key=lambda x: x['revenue'], reverse=True)
+                stats['top_foods'] = foods_list[:5]  # Top 5 foods in category
+
+                del stats['foods']  # Remove the dict version
+                category_revenue_list.append(stats)
+
+            # Sort by total revenue (descending)
+            category_revenue_list.sort(key=lambda x: x['total_revenue'], reverse=True)
+
+            # Calculate totals
+            total_revenue = sum(item['total_revenue'] for item in category_revenue_list)
+            total_quantity = sum(item['total_quantity'] for item in category_revenue_list)
+            total_orders = len(set(detail.order.id for detail in order_details))
+            total_categories = len(category_revenue_list)
+
+            return Response({
+                'success': True,
+                'data': {
+                    'restaurant_id': restaurant_id,
+                    'restaurant_name': restaurant.name,
+                    'period': period_display,
+                    'period_range': {
+                        'start_date': start_date.strftime('%Y-%m-%d'),
+                        'end_date': end_date.strftime('%Y-%m-%d')
+                    },
+                    'summary': {
+                        'total_revenue': round(total_revenue, 2),
+                        'total_quantity': total_quantity,
+                        'total_orders': total_orders,
+                        'total_categories': total_categories,
+                        'avg_order_value': round(total_revenue / total_orders, 2) if total_orders > 0 else 0,
+                        'avg_revenue_per_category': round(total_revenue / total_categories, 2) if total_categories > 0 else 0
+                    },
+                    'category_revenue': category_revenue_list
+                }
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                'error': f'An error occurred: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class CombinedRevenueStatisticsView(RestaurantRevenueStatisticsView):
+
+    def get(self, request, restaurant_id):
+        try:
+            # Validate restaurant exists
+            restaurant = self.get_restaurant(restaurant_id)
+            if not restaurant:
+                return Response({
+                    'error': 'Restaurant not found'
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # Check if user has permission to view this restaurant's data
+            if (request.user.role == 'RESTAURANT_USER' and
+                    hasattr(request.user, 'restaurants') and
+                    request.user.restaurants.id != restaurant.id):
+                return Response({
+                    'error': 'Permission denied'
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Get period parameter
+            period = request.query_params.get('period')
+            if not period:
+                return Response({
+                    'error': 'Period parameter is required'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                start_date, end_date, period_display = self.parse_period(period)
+            except ValidationError as e:
+                return Response({
+                    'error': str(e)
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Get order details for the restaurant in the specified period
+            order_details = self.get_order_details(restaurant, start_date, end_date)
+
+            # Calculate food statistics
+            food_stats = {}
+            category_stats = {}
+
+            for detail in order_details:
+                food_id = detail.food.id
+                category_id = detail.food.food_category.id
+
+                # Food statistics
+                if food_id not in food_stats:
+                    food_stats[food_id] = {
+                        'food_id': food_id,
+                        'food_name': detail.food.name,
+                        'category': detail.food.food_category.name,
+                        'total_quantity': 0,
+                        'total_revenue': 0,
+                        'order_count': set()
+                    }
+
+                food_stats[food_id]['total_quantity'] += detail.quantity
+                food_stats[food_id]['total_revenue'] += detail.sub_total
+                food_stats[food_id]['order_count'].add(detail.order.id)
+
+                # Category statistics
+                if category_id not in category_stats:
+                    category_stats[category_id] = {
+                        'category_id': category_id,
+                        'category_name': detail.food.food_category.name,
+                        'total_quantity': 0,
+                        'total_revenue': 0,
+                        'food_count': set(),
+                        'order_count': set()
+                    }
+
+                category_stats[category_id]['total_quantity'] += detail.quantity
+                category_stats[category_id]['total_revenue'] += detail.sub_total
+                category_stats[category_id]['food_count'].add(detail.food.id)
+                category_stats[category_id]['order_count'].add(detail.order.id)
+
+            # Process food statistics
+            food_revenue_list = []
+            for stats in food_stats.values():
+                stats['order_count'] = len(stats['order_count'])
+                stats['total_revenue'] = round(stats['total_revenue'], 2)
+                food_revenue_list.append(stats)
+
+            food_revenue_list.sort(key=lambda x: x['total_revenue'], reverse=True)
+
+            # Process category statistics
+            category_revenue_list = []
+            for stats in category_stats.values():
+                stats['food_count'] = len(stats['food_count'])
+                stats['order_count'] = len(stats['order_count'])
+                stats['total_revenue'] = round(stats['total_revenue'], 2)
+                category_revenue_list.append(stats)
+
+            category_revenue_list.sort(key=lambda x: x['total_revenue'], reverse=True)
+
+            # Calculate totals
+            total_revenue = sum(item['total_revenue'] for item in food_revenue_list)
+            total_quantity = sum(item['total_quantity'] for item in food_revenue_list)
+            total_orders = len(set(detail.order.id for detail in order_details))
+
+            return Response({
+                'success': True,
+                'data': {
+                    'restaurant_id': restaurant_id,
+                    'restaurant_name': restaurant.name,
+                    'period': period_display,
+                    'period_range': {
+                        'start_date': start_date.strftime('%Y-%m-%d'),
+                        'end_date': end_date.strftime('%Y-%m-%d')
+                    },
+                    'summary': {
+                        'total_revenue': round(total_revenue, 2),
+                        'total_quantity': total_quantity,
+                        'total_orders': total_orders,
+                        'total_foods': len(food_revenue_list),
+                        'total_categories': len(category_revenue_list),
+                        'avg_order_value': round(total_revenue / total_orders, 2) if total_orders > 0 else 0
+                    },
+                    'top_foods': food_revenue_list[:10],  # Top 10 foods
+                    'category_revenue': category_revenue_list,
+                    'full_food_revenue': food_revenue_list  # All foods if needed
+                }
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                'error': f'An error occurred: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

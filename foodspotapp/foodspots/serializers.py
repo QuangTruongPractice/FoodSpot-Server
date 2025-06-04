@@ -221,11 +221,13 @@ class OrderDetailSerializer(BaseSerializer):
 class OrderSerializer(serializers.ModelSerializer):
     address = serializers.PrimaryKeyRelatedField(queryset=Address.objects.all())
     restaurant_name = serializers.CharField(source='restaurant.name', read_only=True)
+    payment_method = serializers.CharField(source='payments.payment_method', read_only=True)
+    payment_status = serializers.CharField(source='payments.status', read_only=True)
 
     class Meta:
         model = Order
         fields = ['id', 'user', 'restaurant', 'restaurant_name', 'ordered_date', 'address',
-                  'total', 'status', 'shipping_fee']
+                  'total', 'status', 'shipping_fee', 'payment_method', 'payment_status']
         extra_kwargs = {
             'user': {'read_only': True},
             'ordered_date': {'read_only': True},
