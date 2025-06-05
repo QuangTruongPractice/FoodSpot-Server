@@ -4,6 +4,8 @@ from .models import (Order, OrderDetail, Food, FoodCategory, FoodReview, Restaur
                      FoodPrice, Follow, Favorite, User, Address, Restaurant, Cart, SubCart, SubCartItem, Menu)
 from rest_framework import serializers
 from cloudinary.uploader import upload
+from collections import defaultdict
+import re
 from PIL import Image
 import io, time
 from django.core.files.base import ContentFile
@@ -197,10 +199,59 @@ class FoodSerializers(BaseSerializer):
             'food_category': {'required': True},
         }
 
-    def validate_name(self, value):
-        if not value:
-            raise serializers.ValidationError("Tên món ăn là bắt buộc")
-        return value
+    def to_internal_value(self, data):
+        # Sao chép data vì MultiValueDict không thể sửa
+        data = data.copy()
+        prices = []
+        # Tìm các trường prices[i][field]
+        price_fields = defaultdict(dict)
+        for key, value in data.items():
+            match = re.match(r'prices\[(\d+)\]\[(\w+)\]', key)
+            if match:
+                index, field = match.groups()
+                price_fields[int(index)][field] = value
+        # Chuyển thành danh sách prices
+        for index in sorted(price_fields.keys()):
+            price = price_fields[index]
+            if 'time_serve' in price and 'price' in price:
+                prices.append({
+                    'time_serve': price['time_serve'],
+                    'price': int(price['price'])
+                })
+        if prices:
+            data['prices'] = prices
+        return super().to_internal_value(data)
+
+    def validate(self, data):
+        # Chỉ validate prices nếu có dữ liệu prices được gửi lên
+        prices = data.get('prices')
+        if prices is not None and len(prices) == 0:
+            raise serializers.ValidationError({"prices": "Nếu gửi prices thì phải có ít nhất 1 giá."})
+        return data
+
+    def create(self, validated_data):
+        prices_data = validated_data.pop('prices', [])  # Mặc định là list rỗng nếu không có
+        food = Food.objects.create(**validated_data)
+        # Chỉ tạo prices nếu có dữ liệu
+        for price_data in prices_data:
+            FoodPrice.objects.create(food=food, **price_data)
+        return food
+
+    def update(self, instance, validated_data):
+        prices_data = validated_data.pop('prices', None)
+
+        # Cập nhật các trường khác trước
+        instance = super().update(instance, validated_data)
+
+        # Cập nhật prices nếu có
+        if prices_data is not None:
+            # Xóa tất cả prices cũ
+            instance.prices.all().delete()
+            # Tạo lại prices mới
+            for price_data in prices_data:
+                FoodPrice.objects.create(food=instance, **price_data)
+
+        return instance
 
 class OrderDetailSerializer(BaseSerializer):
     food = serializers.SerializerMethodField()
