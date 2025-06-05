@@ -6,6 +6,104 @@ from .models import (
     Payment, FoodCategory, Food, FoodPrice, Menu, RestaurantReview,
     FoodReview, Cart, SubCart, SubCartItem
 )
+from django.urls import path
+from django.template.response import TemplateResponse
+from django.db.models import Count, Sum
+from django.db.models.functions import TruncMonth, TruncQuarter, TruncYear
+from django.utils.timezone import now
+from datetime import datetime
+
+class MyAdminSite(admin.AdminSite):
+    site_header = 'FoodSpot Administration'
+    index_title = 'Trang chủ'
+    index_template = 'admin/custom_button.html'
+
+    def get_urls(self):
+        return [
+            path('stats/', self.stats_view, name="stats")
+        ] + super().get_urls()
+
+    def stats_view(self, request):
+        report_type = request.GET.get('report_type', 'month')
+        successful_orders = Order.objects.filter(payments__status='SUCCESS')
+
+        # Lấy giá trị tháng, năm, quý từ request
+        month = int(request.GET.get('month', now().month))
+        year = int(request.GET.get('year', now().year))
+        quarter_str = request.GET.get('quarter')
+        quarter = int(quarter_str) if quarter_str else None
+
+        monthly_stats = []
+        quarterly_stats = []
+        yearly_stats = []
+
+        if report_type == 'month':
+            start_date = datetime(year, month, 1)
+            end_date = datetime(year + 1, 1, 1) if month == 12 else datetime(year, month + 1, 1)
+
+            monthly_stats = successful_orders.filter(
+                ordered_date__gte=start_date,
+                ordered_date__lt=end_date
+            ).values('restaurant__name').annotate(
+                total_revenue=Sum('total'),
+                total_orders=Count('id')
+            ).order_by('-total_revenue')
+
+        elif report_type == 'quarter':
+            if quarter:
+                start_month = (quarter - 1) * 3 + 1
+                start_date = datetime(year, start_month, 1)
+                end_date = datetime(year + 1, 1, 1) if quarter == 4 else datetime(year, start_month + 3, 1)
+
+                filtered_orders = successful_orders.filter(
+                    ordered_date__gte=start_date,
+                    ordered_date__lt=end_date
+                )
+            else:
+                filtered_orders = successful_orders.filter(ordered_date__year=year)
+
+            quarterly_stats = (
+                filtered_orders
+                .annotate(quarter=TruncQuarter('ordered_date'))
+                .values('quarter', 'restaurant__name')
+                .annotate(
+                    total_revenue=Sum('total'),
+                    total_orders=Count('id')
+                )
+                .order_by('quarter')
+            )
+
+            for item in quarterly_stats:
+                dt = item['quarter']
+                quarter_number = (dt.month - 1) // 3 + 1
+                item['quarter_display'] = f"Q{quarter_number} - {dt.year}"
+
+        elif report_type == 'year':
+            filtered_orders = successful_orders.filter(ordered_date__year=year)
+
+            yearly_stats = (
+                filtered_orders
+                .annotate(year=TruncYear('ordered_date'))
+                .values('year', 'restaurant__name')
+                .annotate(
+                    total_revenue=Sum('total'),
+                    total_orders=Count('id')
+                )
+                .order_by('year')
+            )
+
+        return TemplateResponse(request, 'admin/stats.html', {
+            'monthly_stats': monthly_stats,
+            'quarterly_stats': quarterly_stats,
+            'yearly_stats': yearly_stats,
+            'selected_month': month,
+            'selected_year': year,
+            'selected_quarter': quarter,
+            'selected_type': report_type,
+            'month_range': range(1, 13),
+            'year_range': range(now().year - 5, now().year + 1),
+            'title': 'Thống kê',
+        })
 
 class UserAdmin(BaseUserAdmin):
     list_display = ('email', 'username', 'role', 'is_approved', 'is_staff', 'is_superuser')
@@ -143,21 +241,22 @@ class SubCartItemAdmin(admin.ModelAdmin):
     search_fields = ('sub_cart__restaurant__name', 'food__name')
 
 # Đăng ký các model
-admin.site.register(User, UserAdmin)
-admin.site.register(Restaurant, RestaurantAdmin)
-admin.site.register(Address, AddressAdmin)
-admin.site.register(Tag, TagAdmin)
-admin.site.register(Follow, FollowAdmin)
-admin.site.register(Favorite, FavoriteAdmin)
-admin.site.register(Order, OrderAdmin)
-admin.site.register(OrderDetail, OrderDetailAdmin)
-admin.site.register(Payment, PaymentAdmin)
-admin.site.register(FoodCategory, FoodCategoryAdmin)
-admin.site.register(Food, FoodAdmin)
-admin.site.register(FoodPrice, FoodPriceAdmin)
-admin.site.register(Menu, MenuAdmin)
-admin.site.register(RestaurantReview, RestaurantReviewAdmin)
-admin.site.register(FoodReview, FoodReviewAdmin)
-admin.site.register(Cart, CartAdmin)
-admin.site.register(SubCart, SubCartAdmin)
-admin.site.register(SubCartItem, SubCartItemAdmin)
+admin_site = MyAdminSite(name='admin')
+admin_site.register(User, UserAdmin)
+admin_site.register(Restaurant, RestaurantAdmin)
+admin_site.register(Address, AddressAdmin)
+admin_site.register(Tag, TagAdmin)
+admin_site.register(Follow, FollowAdmin)
+admin_site.register(Favorite, FavoriteAdmin)
+admin_site.register(Order, OrderAdmin)
+admin_site.register(OrderDetail, OrderDetailAdmin)
+admin_site.register(Payment, PaymentAdmin)
+admin_site.register(FoodCategory, FoodCategoryAdmin)
+admin_site.register(Food, FoodAdmin)
+admin_site.register(FoodPrice, FoodPriceAdmin)
+admin_site.register(Menu, MenuAdmin)
+admin_site.register(RestaurantReview, RestaurantReviewAdmin)
+admin_site.register(FoodReview, FoodReviewAdmin)
+admin_site.register(Cart, CartAdmin)
+admin_site.register(SubCart, SubCartAdmin)
+admin_site.register(SubCartItem, SubCartItemAdmin)

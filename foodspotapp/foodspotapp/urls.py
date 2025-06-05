@@ -8,6 +8,7 @@ from rest_framework import permissions
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
 import debug_toolbar
+from foodspots.admin import admin_site
 
 schema_view = get_schema_view(
     openapi.Info(
@@ -22,7 +23,7 @@ schema_view = get_schema_view(
 )
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path('admin/', admin_site.urls),
     path('', include('foodspots.urls')),
     path('o/', include('oauth2_provider.urls', namespace='oauth2_provider')),
     path('__debug__/', include(debug_toolbar.urls)),

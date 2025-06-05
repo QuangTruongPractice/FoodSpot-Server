@@ -40,6 +40,11 @@ from .paginators import (
 from datetime import datetime, date
 from calendar import monthrange
 import re
+from django.contrib.admin.views.decorators import staff_member_required
+from django.shortcuts import render
+
+import logging
+logger = logging.getLogger(__name__)
 
 def index(request):
     return HttpResponse("foodspots")
@@ -209,9 +214,7 @@ class OrderDetailViewSet(viewsets.ViewSet, generics.ListAPIView, generics.Retrie
 
         serializer = self.serializer_class(order_details, many=True, context={'request': request})
         logger.info(f"Retrieved {order_details.count()} OrderDetails for order {order_id}")
-        Add
-        commentMore
-        actions
+
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 class FoodPriceViewSet(viewsets.ModelViewSet):
@@ -1722,3 +1725,14 @@ class CombinedRevenueStatisticsView(RestaurantRevenueStatisticsView):
             return Response({
                 'error': f'An error occurred: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@staff_member_required
+def statistics_view(request):
+    # Ví dụ thống kê số lượng user hoặc orders
+    from django.contrib.auth.models import User
+    user_count = User.objects.count()
+
+    return render(request, 'admin/statistics.html', {
+        'user_count': user_count,
+    })
