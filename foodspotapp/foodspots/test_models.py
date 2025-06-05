@@ -193,7 +193,7 @@ menu1 = Menu.objects.create(
 )
 menu1.foods.add(food1)
 menu1.foods.add(food3)
-menu1.foods.add(food4)
+menu1.foods.add(food5)
 menu2 = Menu.objects.create(
     restaurant=restaurant2,
     name='Thực đơn đêm',
@@ -201,36 +201,39 @@ menu2 = Menu.objects.create(
     time_serve='NIGHT'
 )
 menu2.foods.add(food2)
-menu2.foods.add(food5)
+menu2.foods.add(food4)
 menu2.foods.add(food6)
 print("Đã tạo Menu:", menu1, menu2)
 
 # Tạo giỏ hàng
 cart = Cart.objects.create(
     user=customer,
-    item_number=2
+    item_number=0,  # Ban đầu chưa có món, để 0
+    total_price=0.0
 )
 print("Đã tạo Cart:", cart)
 
-# Tạo SubCart
+# Tạo SubCart cho từng nhà hàng
 sub_cart1 = SubCart.objects.create(
     cart=cart,
     restaurant=restaurant1,
-    total_price=90000
+    total_price=0.0,  # Ban đầu total_price 0
+    total_quantity=0
 )
 sub_cart2 = SubCart.objects.create(
     cart=cart,
     restaurant=restaurant2,
-    total_price=70000
+    total_price=0.0,
+    total_quantity=0
 )
 print("Đã tạo SubCart:", sub_cart1, sub_cart2)
 
-# Tạo SubCartItem
+# Tạo SubCartItem cho từng SubCart
 sub_cart_item1 = SubCartItem.objects.create(
     food=food1,
     restaurant=restaurant1,
     sub_cart=sub_cart1,
-    quantity=2,
+    quantity=1,
     price=45000,  # Giá buổi tối
     time_serve='EVENING'
 )
@@ -238,11 +241,27 @@ sub_cart_item2 = SubCartItem.objects.create(
     food=food2,
     restaurant=restaurant2,
     sub_cart=sub_cart2,
-    quantity=2,
+    quantity=1,
     price=35000,  # Giá buổi đêm
     time_serve='NIGHT'
 )
 print("Đã tạo SubCartItem:", sub_cart_item1, sub_cart_item2)
+
+# Cập nhật lại total_quantity và total_price cho từng SubCart
+sub_cart1.total_quantity += sub_cart_item1.quantity
+sub_cart1.total_price += sub_cart_item1.quantity * sub_cart_item1.price
+sub_cart1.save()
+
+sub_cart2.total_quantity += sub_cart_item2.quantity
+sub_cart2.total_price += sub_cart_item2.quantity * sub_cart_item2.price
+sub_cart2.save()
+
+# Cập nhật lại item_number và total_price cho Cart
+cart.item_number = sub_cart1.total_quantity + sub_cart2.total_quantity
+cart.total_price = sub_cart1.total_price + sub_cart2.total_price
+cart.save()
+
+print("Đã cập nhật Cart:", cart.item_number, "items,", "Tổng tiền:", cart.total_price)
 
 # Tạo đơn hàng
 order = Order.objects.create(
@@ -269,7 +288,6 @@ payment = Payment.objects.create(
     order=order,
     payment_method='Thẻ tín dụng',
     status='SUCCESS',
-    amount=90000,
     total_payment=90000
 )
 print("Đã tạo Payment cho order:", payment)
@@ -315,7 +333,6 @@ payment2 = Payment.objects.create(
     order=order2,
     payment_method='Tiền mặt',
     status='SUCCESS',
-    amount=40000,
     total_payment=40000
 )
 print("Đã tạo Payment cho order2:", payment2)
@@ -461,8 +478,8 @@ for menu in restaurant1.menus.all():
 
 # Kiểm tra giỏ hàng
 print("\nDanh sách giỏ hàng của", customer.email, ":")
-for cart in customer.carts.all():
-    print(cart, cart.item_number)
+cart = customer.carts
+print(cart, cart.item_number)
 
 # Kiểm tra SubCart
 print("\nDanh sách SubCart của", cart, ":")

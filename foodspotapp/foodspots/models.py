@@ -1,7 +1,8 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from cloudinary.models import CloudinaryField
-
+from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator, MaxValueValidator
 
 ROLE_CHOICES = [
     ('ADMIN', 'Admin'),
@@ -11,6 +12,11 @@ ROLE_CHOICES = [
 
 FOLLOW_STATUS_CHOICES = [
     ('FOLLOW', 'Follow'),
+    ('CANCEL', 'Cancel'),
+]
+
+FAV_STATUS_CHOICES = [
+    ('FAVORITE', 'Favorite'),
     ('CANCEL', 'Cancel'),
 ]
 
@@ -33,20 +39,15 @@ TIME_SERVE_CHOICES = [
     ('NIGHT', 'Night'),
 ]
 
-
-
-
-ROLE_CHOICES = [
-    ('ADMIN', 'Admin'),
-    ('CUSTOMER', 'Customer'),
-    ('RESTAURANT_USER', 'Restaurant User'),
-]
-
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:
             raise ValueError('The Email field must be set')
         email = self.normalize_email(email)
+        # Đặt giá trị mặc định cho is_approved dựa trên role
+        role = extra_fields.get('role', 'CUSTOMER')
+        extra_fields.setdefault('is_approved', role != 'RESTAURANT_USER')  # Chỉ RESTAURANT_USER cần phê duyệt
+
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
@@ -55,6 +56,10 @@ class UserManager(BaseUserManager):
     def create_superuser(self, email, password=None, **extra_fields):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
+        extra_fields.setdefault('is_approved', True)
+        # Không gán role='ADMIN' cho superuser, để role rỗng hoặc một giá trị đặc biệt
+        extra_fields.setdefault('role', '')  # Superuser không thuộc ROLE_CHOICES
+
         if extra_fields.get('is_staff') is not True:
             raise ValueError('Superuser must have is_staff=True.')
         if extra_fields.get('is_superuser') is not True:
@@ -66,8 +71,9 @@ class User(AbstractUser):
     email = models.EmailField(unique=True)  # Ghi đè để đảm bảo email là duy nhất
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     avatar = CloudinaryField(null=True)
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES)
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, blank=True, default='')  # Cho phép role rỗng
     addresses = models.ManyToManyField('Address', related_name='users', blank=True)
+    is_approved = models.BooleanField(default=True)
 
     objects = UserManager()
 
@@ -97,11 +103,12 @@ class Tag(models.Model):
 class Restaurant(models.Model):
     name = models.CharField(max_length=255)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
-    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='restaurants')
+    owner = models.OneToOneField(User, on_delete=models.CASCADE, related_name='restaurants')
     avatar = CloudinaryField(null=True)
     star_rating = models.FloatField(default=0.0)
     address = models.ForeignKey('Address', on_delete=models.SET_NULL, null=True, blank=True, related_name='restaurants')
     tags = models.ManyToManyField('Tag', related_name='restaurants', blank=True)
+    shipping_fee_per_km = models.IntegerField(default=2000)
 
     def __str__(self):
         return self.name
@@ -123,6 +130,22 @@ class Follow(models.Model):
             raise ValueError("Only users with role CUSTOMER can follow a restaurant.")
         super().save(*args, **kwargs)
 
+class Favorite(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fav_as_user')
+    food = models.ForeignKey('Food', on_delete=models.CASCADE, related_name='fav_as_food')
+    status = models.CharField(max_length=20, choices=FAV_STATUS_CHOICES, default='FAVORITE')
+
+    class Meta:
+        unique_together = ('user', 'food')
+
+    def __str__(self):
+        return f"{self.user.email} favorite {self.food.name} ({self.status})"
+
+    def save(self, *args, **kwargs):
+        if self.user.role != 'CUSTOMER':
+            raise ValueError("Only users with role CUSTOMER can add favorite a food.")
+        super().save(*args, **kwargs)
+
 
 class Order(models.Model):
     total = models.FloatField(default=0.0)
@@ -131,6 +154,7 @@ class Order(models.Model):
     address = models.ForeignKey(Address, on_delete=models.CASCADE, related_name='orders')
     status = models.CharField(max_length=20, choices=ORDER_STATUS_CHOICES, default='PENDING')
     ordered_date = models.DateField(auto_now_add=True, null=True)
+    shipping_fee = models.FloatField(default=0)
 
     def __str__(self):
         return f"Order {self.id} by {self.user.email} at {self.restaurant.name}"
@@ -161,7 +185,6 @@ class Payment(models.Model):
     order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name='payments')
     payment_method = models.CharField(max_length=50)
     status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='FAIL')
-    amount = models.FloatField()
     total_payment = models.FloatField()
     created_date = models.DateField(auto_now_add=True)
 
@@ -186,10 +209,10 @@ class Food(models.Model):
     restaurant = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name='foods')
 
     def update_star_rating(self):
-        reviews = FoodReview.objects.filter(order_detail__food=self, parent=None)
+        order_details = self.order_details.all()
+        reviews = FoodReview.objects.filter(order_detail__in=order_details, parent=None)
         if reviews.exists():
-            avg_rating = reviews.aggregate(models.Avg('star'))['star__avg']
-            self.star_rating = round(avg_rating, 1)
+            self.star_rating = sum(review.star for review in reviews) / reviews.count()
         else:
             self.star_rating = 0.0
         self.save()
@@ -237,12 +260,20 @@ class RestaurantReview(models.Model):
     def __str__(self):
         return f"Restaurant Review by {self.user.email} for {self.restaurant.name} (Star: {self.star})"
 
-    def save(self, *args, **kwargs):
+    def clean(self):
         if not Order.objects.filter(user=self.user, restaurant=self.restaurant).exists():
-            raise ValueError("Only users who have placed at least one order at this restaurant can review it.")
+            raise ValidationError("Only users who have placed at least one order at this restaurant can review it.")
         if not (0.0 <= float(self.star) <= 5.0):
-            raise ValueError("Star rating must be between 0.0 and 5.0.")
+            raise ValidationError("Star rating must be between 0.0 and 5.0.")
+
+    def save(self, *args, **kwargs):
+        self.clean()
         super().save(*args, **kwargs)
+        # Update restaurant star rating
+        reviews = RestaurantReview.objects.filter(restaurant=self.restaurant)
+        avg_rating = reviews.aggregate(models.Avg('star'))['star__avg'] or 0.0
+        self.restaurant.star_rating = round(avg_rating, 1)
+        self.restaurant.save()
 
 
 class FoodReview(models.Model):
@@ -256,27 +287,42 @@ class FoodReview(models.Model):
     class Meta:
         unique_together = ('user', 'order_detail')
 
-    def save(self, *args, **kwargs):
-        if self.parent:
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        if self.parent:  # Logic cho reply
             if self.user.role != 'RESTAURANT_USER':
-                raise ValueError("Only restaurant users can reply to food reviews.")
-            if self.parent.order_detail != self.order_detail:
-                raise ValueError("Replies must belong to the same order detail as the parent review.")
+                raise ValidationError("Only restaurant users can reply to food reviews.")
+            if self.order_detail and self.parent.order_detail != self.order_detail:
+                raise ValidationError("Replies must belong to the same order detail as the parent review.")
             if self.star != 0:
-                raise ValueError("Replies should not have a star rating.")
-        else:
+                raise ValidationError("Replies should not have a star rating.")
+        else:  # Logic cho đánh giá gốc
+            if not self.order_detail:
+                raise ValidationError("Order detail is required for a food review.")
             if self.user != self.order_detail.order.user:
-                raise ValueError("Only the user who placed the order can review the food.")
+                raise ValidationError("Only the user who placed the order can review the food.")
             if not Order.objects.filter(user=self.user, restaurant=self.order_detail.order.restaurant).exists():
-                raise ValueError("Only users who have placed at least one order at this restaurant can review its food.")
+                raise ValidationError("Only users who have placed at least one order at this restaurant can review its food.")
             if not (0.0 <= float(self.star) <= 5.0):
-                raise ValueError("Star rating must be between 0.0 and 5.0.")
+                raise ValidationError("Star rating must be between 0.0 and 5.0.")
+
+    def save(self, *args, **kwargs):
+        self.clean()  # Gọi clean để kiểm tra
         super().save(*args, **kwargs)
+
+        if not self.parent:
+            food = self.order_detail.food
+            food.update_star_rating()
+
+    def __str__(self):
+        return f"Food Review by {self.user.email} for {self.order_detail.food.name if self.order_detail else 'Reply'}"
 
 
 class Cart(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='carts')
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='carts')
     item_number = models.IntegerField(default=0)
+    total_price = models.FloatField(default=0.0)
 
     def __str__(self):
         return f"Cart of {self.user.email}"
@@ -286,6 +332,7 @@ class SubCart(models.Model):
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name='sub_carts')
     restaurant = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name='sub_carts')
     total_price = models.FloatField(default=0.0)
+    total_quantity = models.IntegerField(default=0)
 
     def __str__(self):
         return f"SubCart for {self.restaurant.name} in Cart {self.cart.id}"
@@ -301,8 +348,10 @@ class SubCartItem(models.Model):
 
     def save(self, *args, **kwargs):
         food_price = FoodPrice.objects.get(food=self.food, time_serve=self.time_serve).price
-        self.price = food_price
+        self.price = food_price * self.quantity
         super().save(*args, **kwargs)
 
     def __str__(self):
         return f"SubCartItem {self.food.name} in SubCart {self.sub_cart.id}"
+
+

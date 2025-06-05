@@ -1,0 +1,202 @@
+{% extends 'admin/base_site.html' %}
+
+{% block content %}
+<style>
+  /* Container tổng */
+  form#reportForm {
+    margin-bottom: 20px;
+    padding: 12px 16px;
+    border-radius: 6px;
+    box-shadow: 0 0 8px rgba(0,0,0,0.1);
+    max-width: 600px;
+  }
+
+  form#reportForm label {
+    margin-right: 20px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  form#reportForm select {
+    padding: 6px 10px;
+    margin-left: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+  }
+
+  form#reportForm button {
+    margin-top: 12px;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+  }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    max-width: 900px;
+    margin-bottom: 30px;
+    box-shadow: 0 0 12px rgba(0,0,0,0.05);
+  }
+
+  table th, table td {
+    border: 1px solid #ddd;
+    padding: 12px 15px;
+    text-align: left;
+  }
+
+  table th {
+    color: white;
+    font-weight: 700;
+  }
+
+  h2 {
+    margin-top: 30px;
+    font-weight: 700;
+  }
+
+  /* Ẩn/hiện form chọn theo report_type */
+  #month-fields, #quarter-fields {
+    display: inline-block;
+    margin-left: 20px;
+  }
+
+  /* Responsive nhẹ */
+  @media (max-width: 640px) {
+    form#reportForm {
+      max-width: 100%;
+      padding: 10px;
+    }
+    table {
+      font-size: 14px;
+    }
+    form#reportForm label {
+      display: block;
+      margin-bottom: 8px;
+    }
+    #month-fields, #quarter-fields, #year-field {
+      margin-left: 0;
+      margin-top: 8px;
+      display: block;
+    }
+  }
+</style>
+
+<h2>Chọn loại báo cáo</h2>
+<form method="get" id="reportForm">
+  <label><input type="radio" name="report_type" value="month" {% if selected_type == "month" or not selected_type %}checked{% endif %}> Theo tháng</label>
+  <label><input type="radio" name="report_type" value="quarter" {% if selected_type == "quarter" %}checked{% endif %}> Theo quý</label>
+  <label><input type="radio" name="report_type" value="year" {% if selected_type == "year" %}checked{% endif %}> Theo năm</label>
+
+  <div id="month-fields">
+    <label for="month">Tháng:</label>
+    <select name="month" id="month">
+      {% for m in month_range %}
+        <option value="{{ m }}" {% if m == selected_month %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div id="quarter-fields" style="display: none;">
+    <label for="quarter">Quý:</label>
+    <select name="quarter" id="quarter">
+      <option value="">--</option>
+      <option value="1" {% if selected_quarter == 1 %}selected{% endif %}>Quý 1</option>
+      <option value="2" {% if selected_quarter == 2 %}selected{% endif %}>Quý 2</option>
+      <option value="3" {% if selected_quarter == 3 %}selected{% endif %}>Quý 3</option>
+      <option value="4" {% if selected_quarter == 4 %}selected{% endif %}>Quý 4</option>
+    </select>
+  </div>
+
+  <div id="year-field">
+    <label for="year">Năm:</label>
+    <select name="year" id="year">
+      {% for y in year_range %}
+        <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <button type="submit">Xem thống kê</button>
+</form>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const radios = document.querySelectorAll('input[name="report_type"]');
+  const monthFields = document.getElementById('month-fields');
+  const quarterFields = document.getElementById('quarter-fields');
+
+  function toggleFields() {
+    const selected = document.querySelector('input[name="report_type"]:checked').value;
+    monthFields.style.display = selected === 'month' ? 'inline-block' : 'none';
+    quarterFields.style.display = selected === 'quarter' ? 'inline-block' : 'none';
+  }
+
+  radios.forEach(r => r.addEventListener('change', toggleFields));
+  toggleFields(); // gọi ban đầu
+});
+</script>
+
+{% if selected_type == "month" or not selected_type %}
+<h2>Theo tháng</h2>
+<table>
+  <tr>
+    <th>Tháng</th>
+    <th>Nhà hàng</th>
+    <th>Tổng doanh thu</th>
+    <th>Số đơn hàng</th>
+  </tr>
+  {% for item in monthly_stats %}
+    <tr>
+      <td>{{ selected_month }}</td>
+      <td>{{ item.restaurant__name }}</td>
+      <td>{{ item.total_revenue|floatformat:0 }}₫</td>
+      <td>{{ item.total_orders }}</td>
+    </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if selected_type == "quarter" %}
+<h2>Theo quý</h2>
+<table>
+  <tr>
+    <th>Quý</th>
+    <th>Nhà hàng</th>
+    <th>Tổng doanh thu</th>
+    <th>Số đơn hàng</th>
+  </tr>
+  {% for item in quarterly_stats %}
+    <tr>
+      <td>{{ item.quarter_display }}</td>
+      <td>{{ item.restaurant__name }}</td>
+      <td>{{ item.total_revenue|floatformat:0 }}₫</td>
+      <td>{{ item.total_orders }}</td>
+    </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if selected_type == "year" %}
+<h2>Theo năm</h2>
+<table>
+  <tr>
+    <th>Năm</th>
+    <th>Nhà hàng</th>
+    <th>Tổng doanh thu</th>
+    <th>Số đơn hàng</th>
+  </tr>
+  {% for item in yearly_stats %}
+    <tr>
+      <td>{{ item.year|date:"Y" }}</td>
+      <td>{{ item.restaurant__name }}</td>
+      <td>{{ item.total_revenue|floatformat:0 }}₫</td>
+      <td>{{ item.total_orders }}</td>
+    </tr>
+  {% endfor %}
+</table>
+{% endif %}
+{% endblock %}

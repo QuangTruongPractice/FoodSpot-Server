@@ -1,0 +1,10 @@
+{% extends "admin/index.html" %}
+
+{% block content %}
+  <div class="app-stats" style="margin-left: 100px; margin-top: -40px; margin-bottom: 20px;">
+    <a href="{% url 'admin:stats' %}" class="button" style="padding: 10px 15px; background-color: #28a745; color: white; text-decoration: none; border-radius: 5px;">
+      Xem thống kê
+    </a>
+  </div>
+  {{ block.super }}
+{% endblock %}
