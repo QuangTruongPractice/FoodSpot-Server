@@ -259,69 +259,29 @@ class FoodViewSet(viewsets.ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         try:
-            # Xử lý dữ liệu từ request
-            data = request.data.dict() if hasattr(request.data, 'dict') else request.data
-            
-            # Xử lý file ảnh nếu có
-            if 'image' in request.FILES:
-                try:
-                    image_file = request.FILES['image']
-                    # Upload ảnh lên Cloudinary với timeout dài hơn
-                    result = cloudinary.uploader.upload(
-                        image_file,
-                        timeout=30,  # Tăng timeout lên 30 giây
-                        resource_type="auto",
-                        folder="foodspot/foods"  # Thêm folder để tổ chức ảnh
-                    )
-                    data['image'] = result['secure_url']
-                except Exception as e:
-                    print(f"Error uploading image: {str(e)}")
-                    return Response(
-                        {'error': f'Error uploading image: {str(e)}'}, 
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+            # Debug: In ra để kiểm tra
+            print(f"request.data: {request.data}")
+            print(f"request.FILES: {request.FILES}")
 
-            # Tạo serializer với dữ liệu đã xử lý
-            serializer = self.get_serializer(data=data)
+            serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
-            
-            # Lưu món ăn vào database
+
             food = serializer.save()
-            
-            # Gửi thông báo bất đồng bộ
+
             Thread(target=send_notification_async, args=(food,)).start()
 
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         except Exception as e:
             print(f"Error creating food: {str(e)}")
             return Response(
-                {'error': str(e)}, 
+                {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
     def update(self, request, *args, **kwargs):
         try:
             instance = self.get_object()
-            data = request.data.dict() if hasattr(request.data, 'dict') else request.data
-            
-            # Xử lý file ảnh nếu có
-            if 'image' in request.FILES:
-                try:
-                    image_file = request.FILES['image']
-                    # Upload ảnh lên Cloudinary với timeout dài hơn
-                    result = cloudinary.uploader.upload(
-                        image_file,
-                        timeout=30,  # Tăng timeout lên 30 giây
-                        resource_type="auto",
-                        folder="foodspot/foods"  # Thêm folder để tổ chức ảnh
-                    )
-                    data['image'] = result['secure_url']
-                except Exception as e:
-                    print(f"Error uploading image: {str(e)}")
-                    return Response(
-                        {'error': f'Error uploading image: {str(e)}'}, 
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+            data = request.data
 
             # Cập nhật dữ liệu
             serializer = self.get_serializer(instance, data=data, partial=True)
@@ -336,7 +296,7 @@ class FoodViewSet(viewsets.ModelViewSet):
         except Exception as e:
             print(f"Error updating food: {str(e)}")
             return Response(
-                {'error': str(e)}, 
+                {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
 

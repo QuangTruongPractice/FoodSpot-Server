@@ -34,19 +34,26 @@ def send_notification_email(user_email, subject, message):
     try:
         # Kiểm tra email có tồn tại trong database không
         if not User.objects.filter(email=user_email, is_active=True).exists():
-            print(f"Email {user_email} not found in database")
+            print(f"Email {user_email} not found in database or user is not active")
             return False
             
-        send_mail(
+        print(f"Attempting to send email to {user_email}")
+        print(f"From email: {settings.DEFAULT_FROM_EMAIL}")
+        print(f"Subject: {subject}")
+        print(f"Message: {message}")
+            
+        result = send_mail(
             subject,
             message,
             settings.DEFAULT_FROM_EMAIL,
             [user_email],
-            fail_silently=True
+            fail_silently=False  # Changed to False to see errors
         )
+        print(f"Email send result: {result}")
         return True
     except Exception as e:
         print(f"Error sending email to {user_email}: {str(e)}")
+        print(f"Error type: {type(e)}")
         return False
 
 def create_notification(user, notification_type, title, message, related_object_id=None, related_object_type=None):

@@ -34,18 +34,30 @@ class BaseSerializer(ModelSerializer):
 
     def create(self, validated_data):
         request = self.context.get('request')
+        print(f"Request in serializer: {request}")
+        print(f"Request FILES: {getattr(request, 'FILES', None) if request else None}")
+
         image_file = None
         if request and hasattr(request, 'FILES'):
             image_file = request.FILES.get('image')
+            print(f"Image file found: {image_file}")
 
         if image_file:
             try:
-                # Nén ảnh và tải lên Cloudinary
                 compressed_image = self.compress_image(image_file)
                 upload_result = upload(compressed_image, resource_type="image")
                 validated_data['image'] = upload_result['secure_url']
+                print(f"Image uploaded successfully: {upload_result['secure_url']}")
             except Exception as e:
+                print(f"Upload error: {str(e)}")
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
+
+        avatar_file = request.FILES.get('avatar')
+        if avatar_file:
+            compressed = self.compress_image(avatar_file)
+            upload_result = upload(compressed, resource_type="image")
+            validated_data['avatar'] = upload_result['secure_url']
+
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
@@ -67,6 +79,7 @@ class BaseSerializer(ModelSerializer):
             validated_data['image'] = instance.image  # Giữ ảnh cũ
 
         return super().update(instance, validated_data)
+
 
 
 class UserSerializer(BaseSerializer):
@@ -208,7 +221,6 @@ class FoodSerializers(BaseSerializer):
         }
 
     def to_internal_value(self, data):
-        # Sao chép data vì MultiValueDict không thể sửa
         data = data.copy()
         prices = []
         # Tìm các trường prices[i][field]
@@ -238,11 +250,15 @@ class FoodSerializers(BaseSerializer):
         return data
 
     def create(self, validated_data):
-        prices_data = validated_data.pop('prices', [])  # Mặc định là list rỗng nếu không có
-        food = Food.objects.create(**validated_data)
-        # Chỉ tạo prices nếu có dữ liệu
+        prices_data = validated_data.pop('prices', [])
+
+
+        food = super().create(validated_data)
+
+        # Tạo prices
         for price_data in prices_data:
             FoodPrice.objects.create(food=food, **price_data)
+
         return food
 
     def update(self, instance, validated_data):
@@ -305,7 +321,7 @@ class FoodReviewSerializers(BaseSerializer):
         return FoodReviewSerializers(replies, many=True).data
 
     def get_avatar(self, obj):
-        return obj.user.avatar.url if obj.user.avatar else None
+        return obj.user.avatar.url
 
 class RestaurantReviewSerializer(BaseSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
