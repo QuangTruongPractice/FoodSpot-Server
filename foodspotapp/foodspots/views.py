@@ -45,8 +45,7 @@ from calendar import monthrange
 from threading import Thread
 from .services import notify_new_food, notify_new_menu
 import re
-import cloudinary
-import cloudinary.uploader
+from cloudinary.uploader import upload
 
 import logging
 logger = logging.getLogger(__name__)
@@ -228,14 +227,15 @@ class FoodPriceViewSet(viewsets.ModelViewSet):
         self.perform_update(serializer)
         return Response(serializer.data)
 
-class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIView):
+class FoodViewSet(viewsets.ModelViewSet):
     serializer_class = FoodSerializers
     pagination_class = FoodPagination
 
     def get_permissions(self):
-        if self.action in ['create', 'update', 'destroy']:
+        if self.action in ['list', 'retrieve']:
+            return [AllowAny()]
+        else:
             return [IsAuthenticated(), IsRestaurantOwner()]
-        return [AllowAny()]
 
     def get_queryset(self):
         queryset = Food.objects.select_related(
@@ -284,36 +284,15 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
 
     def create(self, request, *args, **kwargs):
         try:
-            # Xử lý dữ liệu từ request
-            data = request.data.dict() if hasattr(request.data, 'dict') else request.data
+            # Debug: In ra để kiểm tra
+            print(f"request.data: {request.data}")
+            print(f"request.FILES: {request.FILES}")
 
-            # Xử lý file ảnh nếu có
-            if 'image' in request.FILES:
-                try:
-                    image_file = request.FILES['image']
-                    # Upload ảnh lên Cloudinary với timeout dài hơn
-                    result = cloudinary.uploader.upload(
-                        image_file,
-                        timeout=30,  # Tăng timeout lên 30 giây
-                        resource_type="auto",
-                        folder="foodspot/foods"  # Thêm folder để tổ chức ảnh
-                    )
-                    data['image'] = result['secure_url']
-                except Exception as e:
-                    print(f"Error uploading image: {str(e)}")
-                    return Response(
-                        {'error': f'Error uploading image: {str(e)}'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-
-            # Tạo serializer với dữ liệu đã xử lý
-            serializer = self.get_serializer(data=data)
+            serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
 
-            # Lưu món ăn vào database
             food = serializer.save()
 
-            # Gửi thông báo bất đồng bộ
             Thread(target=send_notification_async, args=(food,)).start()
 
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -327,26 +306,7 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
     def update(self, request, *args, **kwargs):
         try:
             instance = self.get_object()
-            data = request.data.dict() if hasattr(request.data, 'dict') else request.data
-
-            # Xử lý file ảnh nếu có
-            if 'image' in request.FILES:
-                try:
-                    image_file = request.FILES['image']
-                    # Upload ảnh lên Cloudinary với timeout dài hơn
-                    result = cloudinary.uploader.upload(
-                        image_file,
-                        timeout=30,  # Tăng timeout lên 30 giây
-                        resource_type="auto",
-                        folder="foodspot/foods"  # Thêm folder để tổ chức ảnh
-                    )
-                    data['image'] = result['secure_url']
-                except Exception as e:
-                    print(f"Error uploading image: {str(e)}")
-                    return Response(
-                        {'error': f'Error uploading image: {str(e)}'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+            data = request.data
 
             # Cập nhật dữ liệu
             serializer = self.get_serializer(instance, data=data, partial=True)
@@ -360,18 +320,6 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
             return Response(serializer.data)
         except Exception as e:
             print(f"Error updating food: {str(e)}")
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-    def destroy(self, request, *args, **kwargs):
-        try:
-            instance = self.get_object()
-            self.perform_destroy(instance)
-            return Response(status=status.HTTP_204_NO_CONTENT)
-        except Exception as e:
-            print(f"Error deleting food: {str(e)}")
             return Response(
                 {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
@@ -627,7 +575,6 @@ class UserViewSet(viewsets.ViewSet):
     def _create_user(self, request, validated_data, role, password):
         email = validated_data['email']
         if User.objects.filter(email=email).exists():
-            print(f"Email {email} đã tồn tại.")
             return None, Response({"error": "Email đã được sử dụng."}, status=status.HTTP_400_BAD_REQUEST)
 
         base_username = email.split('@')[0]
@@ -639,7 +586,8 @@ class UserViewSet(viewsets.ViewSet):
         validated_data['username'] = username
 
         validated_data['role'] = role
-        validated_data['is_approved'] = (role != 'RESTAURANT_USER')  # False cho RESTAURANT_USER, True cho CUSTOMER
+        validated_data['is_approved'] = (role != 'RESTAURANT_USER')
+        print("validated_data trước khi tạo User:", validated_data)
 
         validated_data.pop('password', None)
         user = User(**validated_data)

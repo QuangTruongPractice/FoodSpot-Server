@@ -5,7 +5,6 @@ import re
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError
 
-
 def is_valid_email(email):
     if not email or not isinstance(email, str):
         return False
@@ -21,33 +20,24 @@ def is_valid_email(email):
     except ValidationError:
         return False
 
-
 def send_notification_email(user_email, subject, message):
-    """
-    Gửi email thông báo
-    """
     if not is_valid_email(user_email):
         print(f"Invalid email address: {user_email}")
         return False
 
     try:
-        # Kiểm tra email có tồn tại trong database không
-        if not User.objects.filter(email=user_email, is_active=True).exists():
-            print(f"Email {user_email} not found in database")
-            return False
-
         send_mail(
-            subject,
-            message,
-            settings.DEFAULT_FROM_EMAIL,
-            [user_email],
-            fail_silently=True
+            subject=subject,
+            message=message,
+            from_email='nghianguyen.110616@gmail.com',
+            recipient_list=[user_email],
+            fail_silently=False
         )
+        print(f"Email sent successfully to {user_email}")
         return True
     except Exception as e:
-        print(f"Error sending email to {user_email}: {str(e)}")
+        print(f"Lỗi khi gửi email tới {user_email}: {str(e)}")
         return False
-
 
 def create_notification(user, notification_type, title, message, related_object_id=None, related_object_type=None):
     notification = Notification.objects.create(
@@ -59,7 +49,7 @@ def create_notification(user, notification_type, title, message, related_object_
         related_object_type=related_object_type
     )
 
-    if user.email and '@' in user.email:
+    if user.email and is_valid_email(user.email):
         send_notification_email(
             user.email,
             title,
@@ -68,19 +58,18 @@ def create_notification(user, notification_type, title, message, related_object_
 
     return notification
 
-
 def notify_new_food(food):
     try:
         followers = food.restaurant.follows_as_restaurant.filter(status='FOLLOW').select_related('user')
-        print(followers)
+        print(f"Followers for restaurant {food.restaurant.name}: {followers}")
 
         notifications = []
         for follow in followers:
-            notification = Notification.objects.create(
+            notification = create_notification(
                 user=follow.user,
                 notification_type='new_food',
                 title=f"Món ăn mới tại {food.restaurant.name}",
-                message=food.name,
+                message=f"Món ăn mới: {food.name}",
                 related_object_id=food.id,
                 related_object_type='food'
             )
@@ -104,36 +93,32 @@ def notify_new_food(food):
                     tokens=fcm_tokens
                 )
                 messaging.send_multicast(message)
+                print(f"FCM notifications sent to {len(fcm_tokens)} users")
 
         return True
     except Exception as e:
         print(f"Error sending food notification: {str(e)}")
         return False
 
-
 def notify_new_menu(menu):
     try:
-        # Lấy danh sách khách hàng đã follow nhà hàng
         followers = menu.restaurant.follows_as_restaurant.filter(status='FOLLOW').select_related('user')
+        print(f"Followers for restaurant {menu.restaurant.name}: {followers}")
 
-        # Tạo thông báo cho từng follower
         notifications = []
         for follow in followers:
-            notification = Notification.objects.create(
+            notification = create_notification(
                 user=follow.user,
                 notification_type='new_menu',
                 title=f"Menu mới tại {menu.restaurant.name}",
-                message=f"{menu.name} - {menu.description}",
+                message=f"Menu mới: {menu.name} - {menu.description}",
                 related_object_id=menu.id,
                 related_object_type='menu'
             )
             notifications.append(notification)
 
-        # Gửi thông báo qua FCM nếu có
         if notifications:
             from firebase_admin import messaging
-
-            # Lấy FCM tokens của các user
             fcm_tokens = [n.user.fcm_token for n in notifications if hasattr(n.user, 'fcm_token') and n.user.fcm_token]
 
             if fcm_tokens:
@@ -150,6 +135,7 @@ def notify_new_menu(menu):
                     tokens=fcm_tokens
                 )
                 messaging.send_multicast(message)
+                print(f"FCM notifications sent to {len(fcm_tokens)} users")
 
         return True
     except Exception as e:

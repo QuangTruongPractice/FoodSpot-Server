@@ -126,17 +126,14 @@ class UserAdmin(BaseUserAdmin):
     filter_horizontal = ('addresses',)
 
     def save_model(self, request, obj, form, change):
-        # Lưu trạng thái ban đầu của is_approved (trước khi lưu)
         if change:  # Chỉ kiểm tra khi chỉnh sửa, không phải khi tạo mới
             original_user = User.objects.get(pk=obj.pk)
             was_approved = original_user.is_approved
         else:
             was_approved = None
 
-        # Lưu user
         super().save_model(request, obj, form, change)
 
-        # Gửi email nếu is_approved thay đổi từ False thành True và role là RESTAURANT_USER
         if change and was_approved is False and obj.is_approved is True and obj.role == 'RESTAURANT_USER':
             try:
                 restaurant = Restaurant.objects.get(owner=obj)

@@ -3,10 +3,8 @@ from .models import Order, OrderDetail
 
 class RestaurantOwner(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
-        # Cho phép đọc (GET) cho tất cả
         if request.method in permissions.SAFE_METHODS:
             return True
-        # Chỉ chủ sở hữu nhà hàng mới được chỉnh sửa
         return obj.owner == request.user
 
 class IsOrderOwner(permissions.BasePermission):
@@ -28,11 +26,22 @@ class IsOrderOwner(permissions.BasePermission):
         return False
 
 class IsRestaurantOwner(permissions.BasePermission):
+    def has_permission(self, request, view):
+        # Hỗ trợ quyền khi tạo mới món ăn
+        if view.action == 'create':
+            return (
+                request.user.is_authenticated and
+                request.user.is_approved
+            )
+        return True
+
     def has_object_permission(self, request, view, obj):
-        # Kiểm tra xem người dùng có phải chủ nhà hàng của Food không
-        if hasattr(obj, 'menus') and obj.menus.exists():
-            restaurant = obj.menus.first().restaurant
-            return restaurant and restaurant.owner == request.user and restaurant.owner.is_approved
+        if hasattr(obj, 'restaurant') and obj.restaurant:
+            return (
+                obj.restaurant.owner == request.user and
+                request.user.is_authenticated and
+                request.user.is_approved
+            )
         return False
 
 class IsAdminUser(permissions.BasePermission):

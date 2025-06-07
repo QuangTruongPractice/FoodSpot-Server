@@ -1,7 +1,8 @@
 from rest_framework.serializers import ModelSerializer
 from rest_framework.fields import SerializerMethodField
-from .models import (Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview,FoodPrice, Follow,
-                     Favorite, User, Address, Restaurant, Cart, SubCart, SubCartItem, Menu, Notification)
+from .models import (Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview,
+                     FoodPrice, Follow, Favorite, User, Address, Restaurant, Cart, SubCart,
+                     SubCartItem, Menu, Notification)
 from rest_framework import serializers
 from cloudinary.uploader import upload
 from collections import defaultdict
@@ -26,21 +27,35 @@ class BaseSerializer(ModelSerializer):
         img.thumbnail((600, 600))  # Giảm kích thước để tối ưu
         img.save(output, format='JPEG', quality=75)  # Giảm chất lượng
         output.seek(0)
+        # Trả về bytes trực tiếp thay vì ContentFile để tránh lỗi tuần tự hóa
         return output.getvalue()
 
     def create(self, validated_data):
         request = self.context.get('request')
+        print(f"Request in serializer: {request}")
+        print(f"Request FILES: {getattr(request, 'FILES', None) if request else None}")
+
         image_file = None
         if request and hasattr(request, 'FILES'):
             image_file = request.FILES.get('image')
+            print(f"Image file found: {image_file}")
 
         if image_file:
             try:
                 compressed_image = self.compress_image(image_file)
                 upload_result = upload(compressed_image, resource_type="image")
                 validated_data['image'] = upload_result['secure_url']
+                print(f"Image uploaded successfully: {upload_result['secure_url']}")
             except Exception as e:
+                print(f"Upload error: {str(e)}")
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
+
+        image_file = request.FILES.get('image')
+        if image_file:
+            compressed = self.compress_image(image_file)
+            upload_result = upload(compressed, resource_type="image")
+            validated_data['image'] = upload_result['secure_url']
+
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
@@ -64,8 +79,6 @@ class BaseSerializer(ModelSerializer):
         return super().update(instance, validated_data)
 
 class UserSerializer(BaseSerializer):
-    image = serializers.ImageField(required=False, allow_null=True)
-
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone_number',
@@ -87,13 +100,12 @@ class UserSerializer(BaseSerializer):
         return value
 
     def to_representation(self, instance):
-        rep = super().to_representation(instance)
+        data = super().to_representation(instance)
         if instance.image:
-            try:
-                rep['image'] = instance.image.url
-            except Exception:
-                rep['image'] = str(instance.image)
-        return rep
+            data['image'] = instance.image.url
+        else:
+            data['image'] = None
+        return data
 
 class AddressSerializer(serializers.ModelSerializer):
     class Meta:
@@ -205,7 +217,6 @@ class FoodSerializers(BaseSerializer):
         }
 
     def to_internal_value(self, data):
-        # Sao chép data vì MultiValueDict không thể sửa
         data = data.copy()
         prices = []
         # Tìm các trường prices[i][field]
@@ -235,11 +246,11 @@ class FoodSerializers(BaseSerializer):
         return data
 
     def create(self, validated_data):
-        prices_data = validated_data.pop('prices', [])  # Mặc định là list rỗng nếu không có
-        food = Food.objects.create(**validated_data)
-        # Chỉ tạo prices nếu có dữ liệu
+        prices_data = validated_data.pop('prices', [])
+        food = super().create(validated_data)
         for price_data in prices_data:
             FoodPrice.objects.create(food=food, **price_data)
+
         return food
 
     def update(self, instance, validated_data):
@@ -302,7 +313,7 @@ class FoodReviewSerializers(BaseSerializer):
         return FoodReviewSerializers(replies, many=True).data
 
     def get_image(self, obj):
-        return obj.user.image.url if obj.user.image else None
+        return obj.user.image.url
 
 class RestaurantReviewSerializer(BaseSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
