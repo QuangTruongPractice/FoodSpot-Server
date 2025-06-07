@@ -253,6 +253,9 @@ class Menu(models.Model):
     def __str__(self):
         return f"{self.name} at {self.restaurant.name}"
 
+    class Meta:
+        ordering = ['-created_date']
+
 
 class RestaurantReview(models.Model):
     user = models.ForeignKey('User', on_delete=models.CASCADE, related_name='restaurant_reviews')
