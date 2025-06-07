@@ -123,7 +123,7 @@ def notify_new_menu(menu):
         followers = menu.restaurant.follows_as_restaurant.filter(status='FOLLOW').select_related('user')
         
         # Tạo thông báo cho từng follower
-        notifications = [git
+        notifications = []
         for follow in followers:
             notification = Notification.objects.create(
                 user=follow.user,
