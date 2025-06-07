@@ -113,7 +113,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'foodspotdb',
         'USER': 'root',
-        'PASSWORD': 'Admin@123',
+        'PASSWORD': 'nghia142004',
         'HOST': ''
     }
 }

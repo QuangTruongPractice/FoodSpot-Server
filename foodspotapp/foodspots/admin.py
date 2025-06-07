@@ -186,6 +186,7 @@ class OrderAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'restaurant', 'total', 'status', 'ordered_date')
     list_filter = ('status', 'ordered_date')
     search_fields = ('user__email', 'restaurant__name')
+    list_editable = ('status',)
 
 class OrderDetailAdmin(admin.ModelAdmin):
     list_display = ('order', 'food', 'quantity', 'sub_total', 'time_serve')

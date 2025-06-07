@@ -5,7 +5,9 @@ from .views import (
     RestaurantViewSet, UserViewSet, UserAddressViewSet,
     RestaurantAddressViewSet, SubCartViewSet, SubCartItemViewSet, MenuViewSet,
     CartViewSet, AddItemToCart, UpdateItemToSubCart, MomoPayment, CheckOrdered, MomoCallback,
-    FoodRevenueStatisticsView, CategoryRevenueStatisticsView, CombinedRevenueStatisticsView
+    FoodRevenueStatisticsView, CategoryRevenueStatisticsView, CombinedRevenueStatisticsView,
+    NotificationViewSet
+# , ChatViewSet
 )
 
 router = DefaultRouter()
@@ -23,6 +25,8 @@ router.register('cart', CartViewSet, basename='cart')
 router.register(r'sub-cart', SubCartViewSet, basename='subcart')
 router.register(r'sub-cart-item', SubCartItemViewSet, basename='subcartitem')
 router.register(r'menus', MenuViewSet, basename='menu')
+router.register(r'notifications', NotificationViewSet, basename='notifications')
+# router.register(r'chat', ChatViewSet, basename='chat')
 
 urlpatterns = [
     path('', include(router.urls)),
