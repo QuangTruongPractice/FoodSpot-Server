@@ -1,7 +1,7 @@
 from rest_framework.serializers import ModelSerializer
 from rest_framework.fields import SerializerMethodField
-from .models import (Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview,
-                     FoodPrice, Follow, Favorite, User, Address, Restaurant, Cart, SubCart, SubCartItem, Menu)
+from .models import (Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview,FoodPrice, Follow,
+                     Favorite, User, Address, Restaurant, Cart, SubCart, SubCartItem, Menu, Notification)
 from rest_framework import serializers
 from cloudinary.uploader import upload
 from collections import defaultdict
@@ -15,8 +15,18 @@ class BaseSerializer(ModelSerializer):
 
     def get_image(self, obj):
         if hasattr(obj, 'image') and obj.image:
-            return obj.image.url
+            return str(obj.image)
         return None
+
+    def compress_image(self, image_file):
+        img = Image.open(image_file)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        output = io.BytesIO()
+        img.thumbnail((600, 600))  # Giảm kích thước để tối ưu
+        img.save(output, format='JPEG', quality=75)  # Giảm chất lượng
+        output.seek(0)
+        return output.getvalue()
 
     def create(self, validated_data):
         request = self.context.get('request')
@@ -26,8 +36,9 @@ class BaseSerializer(ModelSerializer):
 
         if image_file:
             try:
-                upload_result = upload(image_file)
-                validated_data['image'] = upload_result['url']
+                compressed_image = self.compress_image(image_file)
+                upload_result = upload(compressed_image, resource_type="image")
+                validated_data['image'] = upload_result['secure_url']
             except Exception as e:
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
         return super().create(validated_data)
@@ -40,32 +51,25 @@ class BaseSerializer(ModelSerializer):
 
         if image_file:
             try:
-                # Nén ảnh trước khi upload
                 compressed_image = self.compress_image(image_file)
-                start_time = time.time()
-                upload_result = upload(compressed_image)
-                end_time = time.time()
-                print(f"Cloudinary upload time: {end_time - start_time} seconds")
-                validated_data['image'] = upload_result['url']
+                upload_result = upload(compressed_image, resource_type="image")
+                validated_data['image'] = upload_result['secure_url']
             except Exception as e:
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
+        elif 'image' in validated_data and validated_data['image'] == '':
+            validated_data['image'] = None  # Xóa ảnh
+        elif 'image' not in validated_data:
+            validated_data['image'] = instance.image  # Giữ ảnh cũ
+
         return super().update(instance, validated_data)
 
-    def compress_image(image_file):
-        img = Image.open(image_file)
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        output = io.BytesIO()
-        img.thumbnail((800, 800))  # Giảm kích thước ảnh
-        img.save(output, format='JPEG', quality=85)  # Nén chất lượng
-        output.seek(0)
-        return ContentFile(output.read(), name=image_file.name)
-
 class UserSerializer(BaseSerializer):
+    image = serializers.ImageField(required=False, allow_null=True)
+
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone_number',
-                  'role', 'password', 'avatar', 'is_approved']
+                  'role', 'password', 'image', 'is_approved']
         extra_kwargs = {
             'password': {'write_only': True},
             'role': {'required': False},
@@ -83,12 +87,13 @@ class UserSerializer(BaseSerializer):
         return value
 
     def to_representation(self, instance):
-        data = super().to_representation(instance)
-        if instance.avatar:
-            data['avatar'] = instance.avatar.url
-        else:
-            data['avatar'] = None
-        return data
+        rep = super().to_representation(instance)
+        if instance.image:
+            try:
+                rep['image'] = instance.image.url
+            except Exception:
+                rep['image'] = str(instance.image)
+        return rep
 
 class AddressSerializer(serializers.ModelSerializer):
     class Meta:
@@ -105,11 +110,11 @@ class UserAddressSerializer(serializers.ModelSerializer):
 class RestaurantSerializer(BaseSerializer):
     owner = UserSerializer(read_only=True)
     address = AddressSerializer()
-    avatar = serializers.ImageField(allow_null=True, required=False)
+    image = serializers.ImageField(allow_null=True, required=False)
 
     class Meta:
         model = Restaurant
-        fields = ['id', 'name', 'avatar', 'phone_number', 'owner', 'star_rating', 'shipping_fee_per_km', 'address']
+        fields = ['id', 'name', 'image', 'phone_number', 'owner', 'star_rating', 'shipping_fee_per_km', 'address']
 
     def update(self, instance, validated_data):
         print("Validated data in serializer:", validated_data)  # Log để debug
@@ -286,28 +291,28 @@ class OrderSerializer(serializers.ModelSerializer):
 
 class FoodReviewSerializers(BaseSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
-    avatar = serializers.SerializerMethodField()
+    image = serializers.SerializerMethodField()
     replies = serializers.SerializerMethodField(required=False)
     class Meta:
         model = FoodReview
-        fields = ['id', 'user', 'user_name', 'avatar', 'order_detail', 'comment', 'created_date', 'star', 'replies']
+        fields = ['id', 'user', 'user_name', 'image', 'order_detail', 'comment', 'created_date', 'star', 'replies']
 
     def get_replies(self, obj):
         replies = FoodReview.objects.filter(parent=obj)
         return FoodReviewSerializers(replies, many=True).data
 
-    def get_avatar(self, obj):
-        return obj.user.avatar.url if obj.user.avatar else None
+    def get_image(self, obj):
+        return obj.user.image.url if obj.user.image else None
 
 class RestaurantReviewSerializer(BaseSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
-    avatar = serializers.SerializerMethodField()
+    image = serializers.SerializerMethodField()
     class Meta:
         model = RestaurantReview
-        fields = ['id', 'user', 'user_name', 'avatar', 'restaurant', 'comment', 'created_date', 'star']
+        fields = ['id', 'user', 'user_name', 'image', 'restaurant', 'comment', 'created_date', 'star']
 
-    def get_avatar(self, obj):
-        return obj.user.avatar.url if obj.user.avatar else None
+    def get_image(self, obj):
+        return obj.user.image.url if obj.user.image else None
 
 class FollowSerializer(serializers.ModelSerializer):
     class Meta:
@@ -340,3 +345,9 @@ class CartSerializer(serializers.ModelSerializer):
     class Meta:
         model = Cart
         fields = ['id', 'user', 'item_number', 'total_price']
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = ['id', 'notification_type', 'title', 'message', 'is_read', 'created_at', 'related_object_id', 'related_object_type']
+        read_only_fields = ['created_at']

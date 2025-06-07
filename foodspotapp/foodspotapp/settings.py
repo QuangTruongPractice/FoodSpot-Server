@@ -71,7 +71,6 @@ INTERNAL_IPS = [
     '127.0.0.1'
 ]
 
-
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'oauth2_provider.contrib.rest_framework.OAuth2Authentication',

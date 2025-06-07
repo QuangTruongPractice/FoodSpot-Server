@@ -112,7 +112,7 @@ class UserAdmin(BaseUserAdmin):
     ordering = ('email',)
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
-        ('Personal info', {'fields': ('username', 'first_name', 'last_name', 'phone_number', 'avatar')}),
+        ('Personal info', {'fields': ('username', 'first_name', 'last_name', 'phone_number', 'image')}),
         ('Permissions', {'fields': ('is_approved', 'is_active', 'is_staff', 'is_superuser')}),
         ('Role', {'fields': ('role',)}),
         ('Addresses', {'fields': ('addresses',)}),
@@ -186,6 +186,7 @@ class OrderAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'restaurant', 'total', 'status', 'ordered_date')
     list_filter = ('status', 'ordered_date')
     search_fields = ('user__email', 'restaurant__name')
+    list_editable = ('status',)
 
 class OrderDetailAdmin(admin.ModelAdmin):
     list_display = ('order', 'food', 'quantity', 'sub_total', 'time_serve')

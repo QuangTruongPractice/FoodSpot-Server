@@ -1,7 +1,9 @@
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
-from django.db import transaction, IntegrityError
+from django.db import transaction, IntegrityError, models
 from django.db.models import Q, Prefetch, Sum, Count
+from django.core.mail import send_mail
+from django.conf import settings
 
 from rest_framework import viewsets, generics, mixins, status, permissions
 from rest_framework.views import APIView
@@ -17,7 +19,7 @@ from .models import (
     Order, OrderDetail, Food, FoodCategory, FoodReview,
     RestaurantReview, Restaurant, FoodPrice, Follow,
     Favorite, Cart, SubCart, SubCartItem, Payment,
-    User, Address, Menu
+    User, Address, Menu, Notification
 )
 
 from .serializers import (
@@ -25,7 +27,8 @@ from .serializers import (
     FoodReviewSerializers, RestaurantReviewSerializer, FoodPriceSerializer,
     FollowSerializer, FavoriteSerializer, CartSerializer,
     SubCartSerializer, SubCartItemSerializer, UserSerializer,
-    RestaurantSerializer, RestaurantAddressSerializer, AddressSerializer, UserAddressSerializer, MenuSerializer
+    RestaurantSerializer, RestaurantAddressSerializer, AddressSerializer,
+    UserAddressSerializer, MenuSerializer, NotificationSerializer
 )
 
 from .perms import (
@@ -34,14 +37,16 @@ from .perms import (
 )
 
 from .paginators import (
-    FoodPagination, OrderPagination, ReviewPagination,
+    FoodPagination, OrderPagination, ReviewPagination, NotificationPagination
 )
 
 from datetime import datetime, date
 from calendar import monthrange
+from threading import Thread
+from .services import notify_new_food, notify_new_menu
 import re
-from django.contrib.admin.views.decorators import staff_member_required
-from django.shortcuts import render
+import cloudinary
+import cloudinary.uploader
 
 import logging
 logger = logging.getLogger(__name__)
@@ -87,7 +92,6 @@ class OrderViewSet(viewsets.ViewSet):
             class Meta(OrderSerializer.Meta):
                 fields = OrderSerializer.Meta.fields + ['order_details']
 
-        # Serialize và trả về chi tiết đơn hàng
         return Response(OrderDetailWithItemsSerializer(order).data)
 
     def create(self, request, *args, **kwargs):
@@ -105,12 +109,11 @@ class OrderViewSet(viewsets.ViewSet):
             return Response({"error": "Chỉ được cập nhật trạng thái đơn hàng."}, status=status.HTTP_400_BAD_REQUEST)
 
         order.status = status
-        order.save()  # Lưu lại đối tượng order đã cập nhật
+        order.save()
         return Response(OrderSerializer(order).data)
 
     @action(methods=['post'], detail=False, url_path='checkout')
     def checkout(self, request):
-        # Lấy dữ liệu từ request.data
         user = request.user
         sub_cart_id = request.data.get("sub_cart_id")
         payment_method = request.data.get("payment_method")
@@ -187,13 +190,8 @@ class OrderDetailViewSet(viewsets.ViewSet, generics.ListAPIView, generics.Retrie
 
     @action(methods=['get'], detail=False, url_path='by-order/(?P<order_id>\d+)')
     def by_order(self, request, order_id=None):
-        """
-        Lấy tất cả OrderDetail theo ID của Order mà không sử dụng phân trang, hỗ trợ lọc theo food_id.
-        """
         user = self.request.user
         order = get_object_or_404(Order, pk=order_id)
-
-        # Kiểm tra quyền truy cập: người dùng phải là chủ đơn hàng hoặc chủ nhà hàng
         if order.user != user and order.restaurant.owner != user:
             logger.warning(f"User {user.id} does not have permission to view OrderDetails for order {order_id}")
             return Response(
@@ -204,7 +202,6 @@ class OrderDetailViewSet(viewsets.ViewSet, generics.ListAPIView, generics.Retrie
             order=order
         ).select_related('food').order_by('-id')
 
-        # Lọc theo food_id
         food_id = request.query_params.get('food_id')
         if food_id:
             try:
@@ -222,7 +219,6 @@ class FoodPriceViewSet(viewsets.ModelViewSet):
     serializer_class = FoodPriceSerializer
 
     def partial_update(self, request, *args, **kwargs):
-        """Cập nhật chỉ trường price."""
         if set(request.data.keys()) != {"price"}:
             raise ValidationError({"detail": "Chỉ được phép cập nhật trường 'price'."})
 
@@ -286,78 +282,100 @@ class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIVi
             queryset = queryset.filter(id__in=food_prices.values('food_id')).distinct()
         return queryset
 
-    def create(self, request):
-        # Loại bỏ trường prices nếu có trong dữ liệu để tránh lỗi validation
-        data = request.data.copy()
-        if 'prices' in data:
-            data.pop('prices')
-
-        serializer = self.get_serializer(data=data)
-        if not serializer.is_valid():
-            logger.error(f"Food validation failed: {serializer.errors}")
-            return Response({"error": "Dữ liệu không hợp lệ", "details": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
-
-        restaurant_id = serializer.validated_data['restaurant'].id
-        restaurant = get_object_or_404(Restaurant, id=restaurant_id)
+    def create(self, request, *args, **kwargs):
         try:
-            with transaction.atomic():
-                food = serializer.save()
-            logger.info(f"Created food: {food.id} - {food.name}")
-            return Response(self.get_serializer(food).data, status=status.HTTP_201_CREATED)
+            # Xử lý dữ liệu từ request
+            data = request.data.dict() if hasattr(request.data, 'dict') else request.data
+
+            # Xử lý file ảnh nếu có
+            if 'image' in request.FILES:
+                try:
+                    image_file = request.FILES['image']
+                    # Upload ảnh lên Cloudinary với timeout dài hơn
+                    result = cloudinary.uploader.upload(
+                        image_file,
+                        timeout=30,  # Tăng timeout lên 30 giây
+                        resource_type="auto",
+                        folder="foodspot/foods"  # Thêm folder để tổ chức ảnh
+                    )
+                    data['image'] = result['secure_url']
+                except Exception as e:
+                    print(f"Error uploading image: {str(e)}")
+                    return Response(
+                        {'error': f'Error uploading image: {str(e)}'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            # Tạo serializer với dữ liệu đã xử lý
+            serializer = self.get_serializer(data=data)
+            serializer.is_valid(raise_exception=True)
+
+            # Lưu món ăn vào database
+            food = serializer.save()
+
+            # Gửi thông báo bất đồng bộ
+            Thread(target=send_notification_async, args=(food,)).start()
+
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
         except Exception as e:
-            logger.error(f"Error creating food: {str(e)}")
+            print(f"Error creating food: {str(e)}")
             return Response(
-                {"error": "Lỗi khi tạo món ăn.", "detail": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
-    def update(self, request, pk=None):
-        food = get_object_or_404(Food, pk=pk)
-        serializer = self.get_serializer(food, data=request.data)
-        if not serializer.is_valid():
-            logger.error(f"Food validation errors: {serializer.errors}")
-            return Response({"error": "Dữ liệu không hợp lệ", "details": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+    def update(self, request, *args, **kwargs):
         try:
-            with transaction.atomic():
-                food = serializer.save()
-            logger.info(f"Updated food: {food.id} - {food.name}")
-            return Response(self.get_serializer(food).data)
-        except Exception as e:
-            logger.error(f"Error updating food {pk}: {str(e)}")
-            return Response(
-                {"error": "Lỗi cập nhật món ăn.", "detail": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            instance = self.get_object()
+            data = request.data.dict() if hasattr(request.data, 'dict') else request.data
 
-    def partial_update(self, request, pk=None):
-        logger.info(f"Received PATCH request for food {pk} with data: {request.data}")
-        food = get_object_or_404(Food, pk=pk)
-        serializer = self.get_serializer(food, data=request.data, partial=True)
-        if not serializer.is_valid():
-            logger.error(f"Food validation errors: {serializer.errors}")
-            return Response({"error": "Dữ liệu không hợp lệ", "details": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
-        try:
-            with transaction.atomic():
-                food = serializer.save()
-            logger.info(f"Partially updated food: {food.id} - {food.name}")
-            serializer = self.get_serializer(food)  # Serialize lại để trả về
+            # Xử lý file ảnh nếu có
+            if 'image' in request.FILES:
+                try:
+                    image_file = request.FILES['image']
+                    # Upload ảnh lên Cloudinary với timeout dài hơn
+                    result = cloudinary.uploader.upload(
+                        image_file,
+                        timeout=30,  # Tăng timeout lên 30 giây
+                        resource_type="auto",
+                        folder="foodspot/foods"  # Thêm folder để tổ chức ảnh
+                    )
+                    data['image'] = result['secure_url']
+                except Exception as e:
+                    print(f"Error uploading image: {str(e)}")
+                    return Response(
+                        {'error': f'Error uploading image: {str(e)}'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            # Cập nhật dữ liệu
+            serializer = self.get_serializer(instance, data=data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            food = serializer.save()
+
+            # Gửi thông báo bất đồng bộ nếu có thay đổi
+            if any(field in data for field in ['name', 'price', 'description', 'image']):
+                Thread(target=send_notification_async, args=(food,)).start()
+
             return Response(serializer.data)
         except Exception as e:
-            logger.error(f"Error partially updating food {pk}: {str(e)}", exc_info=True)
+            print(f"Error updating food: {str(e)}")
             return Response(
-                {"error": "Lỗi cập nhật món ăn.", "detail": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
-    def destroy(self, request, pk=None):
-        food = get_object_or_404(Food, pk=pk)
-        food_name = food.name
-        food.delete()
-        logger.info(f"Deleted food: {pk} - {food_name}")
-        return Response(
-            {"message": "Món ăn đã được xóa thành công."},
-            status=status.HTTP_204_NO_CONTENT
-        )
+    def destroy(self, request, *args, **kwargs):
+        try:
+            instance = self.get_object()
+            self.perform_destroy(instance)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            print(f"Error deleting food: {str(e)}")
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
     @action(detail=True, methods=['get'])
     def reviews(self, request, pk=None):
@@ -509,7 +527,7 @@ class BaseReviewUpdateMixin(viewsets.ViewSet):
     review_serializer = None
 
     def get_permissions(self):
-        if hasattr(self, 'action'):  # Kiểm tra xem action có tồn tại không
+        if hasattr(self, 'action'):
             if self.action == 'list':
                 return [permissions.AllowAny()]
             elif self.action == 'create':
@@ -586,7 +604,7 @@ class UserViewSet(viewsets.ViewSet):
         except User.DoesNotExist:
             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        if not (user.is_superuser or user.role == 'ADMIN' or user == target_user):
+        if not (user.is_superuser or user.role == 'ADMIN' or user.role == 'RESTAURANT_USER' or user == target_user):
             return Response({"error": "You can only view your own details."}, status=status.HTTP_403_FORBIDDEN)
 
         serializer = UserSerializer(target_user)
@@ -1032,57 +1050,7 @@ class CartViewSet(viewsets.ViewSet, generics.DestroyAPIView):
 class SubCartViewSet(viewsets.ViewSet):
     serializer_class = SubCartSerializer
     queryset = SubCart.objects.all()
-    def get_permissions(self):
-        # Yêu cầu đăng nhập cho tất cả hành động vì giỏ hàng là dữ liệu cá nhân
-        return [IsAuthenticated()]
-
-    def list(self, request):
-        user = request.user
-        if user.role != 'CUSTOMER':
-            return Response({"error": "Only customers can view their sub-carts."}, status=status.HTTP_403_FORBIDDEN)
-
-        queryset = SubCart.objects.filter(cart__user=user)
-        serializer = SubCartSerializer(queryset, many=True)
-        return Response(serializer.data)
-
-    def retrieve(self, request, pk=None):
-        user = request.user
-        if user.role != 'CUSTOMER':
-            return Response({"error": "Only customers can view their sub-carts."}, status=status.HTTP_403_FORBIDDEN)
-
-        try:
-            sub_cart = SubCart.objects.get(pk=pk, cart__user=user)
-            serializer = SubCartSerializer(sub_cart)
-            return Response(serializer.data)
-        except SubCart.DoesNotExist:
-            return Response({"error": "SubCart not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    def create(self, request):
-        user = request.user
-        if user.role != 'CUSTOMER':
-            return Response({"error": "Only customers can create sub-carts."}, status=status.HTTP_403_FORBIDDEN)
-
-        serializer = SubCartSerializer(data=request.data, context={'request': request})
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    def destroy(self, request, pk=None):
-        user = request.user
-        if user.role != 'CUSTOMER':
-            return Response({"error": "Only customers can delete their sub-carts."}, status=status.HTTP_403_FORBIDDEN)
-
-        try:
-            sub_cart = SubCart.objects.get(pk=pk, cart__user=user)
-            cart = sub_cart.cart
-            sub_cart.delete()
-            if not cart.sub_carts.exists():  # Kiểm tra nếu cart không còn sub_cart nào
-                cart.delete()
-
-            return Response({"message": "SubCart deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
-        except SubCart.DoesNotExist:
-            return Response({"error": "SubCart not found"}, status=status.HTTP_404_NOT_FOUND)
+    permission_classes = [permissions.IsAuthenticated]
 
     @action(methods=['get'], url_path='restaurant-sub-cart', detail=False)
     def get_sub_cart(self, request):
@@ -1123,79 +1091,7 @@ class SubCartViewSet(viewsets.ViewSet):
 class SubCartItemViewSet(viewsets.ViewSet):
     serializer_class = SubCartItemSerializer
     queryset = SubCartItem.objects.all()
-    def get_permissions(self):
-        # Yêu cầu đăng nhập cho tất cả hành động vì liên quan đến giỏ hàng
-        return [IsAuthenticated()]
-
-    def list(self, request):
-        user = request.user
-        if user.role != 'CUSTOMER':
-            return Response({"error": "Only customers can view their sub-cart items."}, status=status.HTTP_403_FORBIDDEN)
-
-        queryset = SubCartItem.objects.filter(sub_cart__cart__user=user)
-        serializer = SubCartItemSerializer(queryset, many=True)
-        return Response(serializer.data)
-
-    def retrieve(self, request, pk=None):
-        user = request.user
-        if user.role != 'CUSTOMER':
-            return Response({"error": "Only customers can view their sub-cart items."}, status=status.HTTP_403_FORBIDDEN)
-
-        try:
-            sub_cart_item = SubCartItem.objects.get(pk=pk, sub_cart__cart__user=user)
-            serializer = SubCartItemSerializer(sub_cart_item)
-            return Response(serializer.data)
-        except SubCartItem.DoesNotExist:
-            return Response({"error": "SubCartItem not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    def create(self, request):
-        user = request.user
-        if user.role != 'CUSTOMER':
-            return Response({"error": "Only customers can add items to their sub-carts."}, status=status.HTTP_403_FORBIDDEN)
-
-        serializer = SubCartItemSerializer(data=request.data, context={'request': request})
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    def update(self, request, pk=None):
-        user = request.user
-        if user.role != 'CUSTOMER':
-            return Response({"error": "Only customers can update their sub-cart items."}, status=status.HTTP_403_FORBIDDEN)
-
-        try:
-            sub_cart_item = SubCartItem.objects.get(pk=pk, sub_cart__cart__user=user)
-            serializer = SubCartItemSerializer(sub_cart_item, data=request.data, partial=True)
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        except SubCartItem.DoesNotExist:
-            return Response({"error": "SubCartItem not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    def destroy(self, request, pk=None):
-        user = request.user
-        if user.role != 'CUSTOMER':
-            return Response({"error": "Only customers can delete their sub-cart items."}, status=status.HTTP_403_FORBIDDEN)
-
-        try:
-            sub_cart_item = SubCartItem.objects.get(pk=pk, sub_cart__cart__user=user)
-            sub_cart = sub_cart_item.sub_cart  # Lưu lại sub_cart trước khi xóa
-            cart = sub_cart.cart  # Lưu lại cart trước khi xóa
-            sub_cart_item.delete()
-            # Kiểm tra nếu SubCart không còn item nào thì xóa luôn SubCart
-            if not sub_cart.sub_cart_items.exists():  # Kiểm tra nếu sub_cart không còn item nào
-                sub_cart.delete()
-                # Kiểm tra nếu Cart không còn SubCart nào thì xóa luôn Cart
-                if not cart.sub_carts.exists():  # Kiểm tra nếu cart không còn sub_cart nào
-                    cart.delete()
-
-            return Response({"message": "SubCartItem and related SubCart and Cart deleted successfully."},
-                            status=status.HTTP_204_NO_CONTENT)
-
-        except SubCartItem.DoesNotExist:
-            return Response({"error": "SubCartItem not found"}, status=status.HTTP_404_NOT_FOUND)
+    permission_classes = [permissions.IsAuthenticated]
 
     @action(methods=['post'], detail=False, url_path='delete-multiple')
     def delete_multiple(self, request):
@@ -1289,7 +1185,8 @@ class MenuViewSet(viewsets.ViewSet):
         if restaurant is None:
             logger.error("Restaurant is None in perform_create")
             raise ValueError("Restaurant cannot be None")
-        serializer.save(restaurant=restaurant)
+        menu = serializer.save(restaurant=restaurant)
+        notify_new_menu(menu)
 
     def update(self, request, pk=None):
         user = request.user
@@ -1500,8 +1397,8 @@ class MomoPayment(APIView):
             partnerCode = "MOMO"
             accessKey = "F8BBA842ECF85"
             secretKey = "K951B6PE1waDMi640xX08PD3vg6EkVlz"
-            redirectUrl = 'foodspot://cart'
-            ipnUrl = "https://9a39-2405-4802-9111-2a0-1592-a9fa-2a78-cacc.ngrok-free.app/momo-callback/"
+            redirectUrl = 'foodspot://payment-result'
+            ipnUrl = "https://7082-2405-4802-9111-2a0-303e-3c97-d01f-3c5c.ngrok-free.app/momo-callback/"
 
             # Tham số từ người dùng
             amount = str(request.data.get('amount'))
@@ -1586,6 +1483,18 @@ class CheckOrdered(APIView):
             )
         has_ordered = Order.objects.filter(user=request.user, restaurant_id=restaurant_id).exists()
         return Response({"has_ordered": has_ordered})
+
+class CheckOwnerRestaurant(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if user.role == 'RESTAURANT_USER':
+            restaurant = Restaurant.objects.filter(owner=user).first()
+            if restaurant:
+                return Response({'restaurant_id': restaurant.id})
+
+        return Response({})
 
 class RestaurantRevenueStatisticsView(APIView):
     permission_classes = [IsAuthenticated]
@@ -2004,13 +1913,74 @@ class CombinedRevenueStatisticsView(RestaurantRevenueStatisticsView):
                 'error': f'An error occurred: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+class NotificationViewSet(viewsets.ModelViewSet):
+    serializer_class = NotificationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = NotificationPagination
 
-@staff_member_required
-def statistics_view(request):
-    # Ví dụ thống kê số lượng user hoặc orders
-    from django.contrib.auth.models import User
-    user_count = User.objects.count()
+    def get_queryset(self):
+        user = self.request.user
+        return Notification.objects.filter(user=user).order_by('-created_at')
 
-    return render(request, 'admin/statistics.html', {
-        'user_count': user_count,
-    })
+    def list(self, request, *args, **kwargs):
+        """
+        Lấy danh sách thông báo cho user hiện tại
+        """
+        try:
+            queryset = self.get_queryset()
+            serializer = self.get_serializer(queryset, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            print(f"Error getting notifications: {str(e)}")
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(detail=False, methods=['get'], url_path='unread-count')
+    def unread_count(self, request):
+        try:
+            count = self.get_queryset().filter(is_read=False).count()
+            return Response({'unread_count': count})
+        except Exception as e:
+            print(f"Error getting unread count: {str(e)}")
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(detail=False, methods=['post'], url_path='mark-all-read')
+    def mark_all_read(self, request):
+        try:
+            queryset = self.get_queryset().filter(is_read=False)
+            if queryset.exists():
+                queryset.update(is_read=True)
+                return Response({'status': 'success'})
+            return Response({'status': 'no unread notifications'})
+        except Exception as e:
+            print(f"Error marking all as read: {str(e)}")
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(detail=False, methods=['get'], url_path='unread-count')
+    def unread_count(self, request):
+        """
+        Lấy số lượng thông báo chưa đọc của người dùng hiện tại.
+        """
+        try:
+            count = self.get_queryset().filter(is_read=False).count()
+            return Response({'unread_count': count})
+        except Exception as e:
+            print(f"Error getting unread count: {str(e)}")
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+def send_notification_async(food):
+    try:
+        notify_new_food(food)
+    except Exception as e:
+        print(f"Error sending notification: {str(e)}")

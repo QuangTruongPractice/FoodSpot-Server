@@ -25,6 +25,7 @@ ORDER_STATUS_CHOICES = [
     ('ACCEPTED', 'Accepted'),
     ('DELIVERED', 'Delivered'),
     ('CANCEL', 'Cancel'),
+    ('FAIL', 'Fail')
 ]
 
 PAYMENT_STATUS_CHOICES = [
@@ -70,7 +71,7 @@ class User(AbstractUser):
     # Các trường mặc định từ AbstractUser: username, first_name, last_name, email, password, is_staff, is_active, date_joined, is_superuser
     email = models.EmailField(unique=True)  # Ghi đè để đảm bảo email là duy nhất
     phone_number = models.CharField(max_length=20, blank=True, null=True)
-    avatar = CloudinaryField(null=True)
+    image = CloudinaryField(null=True)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, blank=True, default='')  # Cho phép role rỗng
     addresses = models.ManyToManyField('Address', related_name='users', blank=True)
     is_approved = models.BooleanField(default=True)
@@ -104,7 +105,7 @@ class Restaurant(models.Model):
     name = models.CharField(max_length=255)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     owner = models.OneToOneField(User, on_delete=models.CASCADE, related_name='restaurants')
-    avatar = CloudinaryField(null=True)
+    image = CloudinaryField(null=True)
     star_rating = models.FloatField(default=0.0)
     address = models.ForeignKey('Address', on_delete=models.SET_NULL, null=True, blank=True, related_name='restaurants')
     tags = models.ManyToManyField('Tag', related_name='restaurants', blank=True)
@@ -188,6 +189,12 @@ class Payment(models.Model):
     total_payment = models.FloatField()
     created_date = models.DateField(auto_now_add=True)
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.payment_method.upper() == 'MOMO' and self.status.upper() == 'FAIL':
+            self.order.status = 'FAIL'
+            self.order.save()
+
     def __str__(self):
         return f"Payment {self.id} for Order {self.order.id}"
 
@@ -242,6 +249,9 @@ class Menu(models.Model):
     is_active = models.BooleanField(default=True)
     time_serve = models.CharField(max_length=20, choices=TIME_SERVE_CHOICES)
     foods = models.ManyToManyField(Food, related_name='menus')
+
+    class Meta:
+        ordering = ['-created_date']
 
     def __str__(self):
         return f"{self.name} at {self.restaurant.name}"
@@ -354,4 +364,24 @@ class SubCartItem(models.Model):
     def __str__(self):
         return f"SubCartItem {self.food.name} in SubCart {self.sub_cart.id}"
 
+class Notification(models.Model):
+    NOTIFICATION_TYPES = (
+        ('new_menu', 'New Menu'),
+        ('new_food', 'New Food Item'),
+    )
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES)
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    related_object_id = models.PositiveIntegerField(null=True, blank=True)
+    related_object_type = models.CharField(max_length=50, null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.notification_type} - {self.user.username} - {self.created_at}"
 

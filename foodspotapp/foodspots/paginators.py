@@ -11,3 +11,6 @@ class OrderPagination(PageNumberPagination):
 class ReviewPagination(PageNumberPagination):
     page_size = 12
     page_size_query_param = 'page_size'
+
+class NotificationPagination(PageNumberPagination):
+    page_size = 10
