@@ -1,7 +1,8 @@
 from rest_framework.serializers import ModelSerializer
 from rest_framework.fields import SerializerMethodField
 from .models import (Order, OrderDetail, Food, FoodCategory, FoodReview, RestaurantReview,
-                     FoodPrice, Follow, Favorite, User, Address, Restaurant, Cart, SubCart, SubCartItem, Menu)
+                     FoodPrice, Follow, Favorite, User, Address, Restaurant, Cart, SubCart,
+                     SubCartItem, Menu, Notification)
 from rest_framework import serializers
 from cloudinary.uploader import upload
 from collections import defaultdict
@@ -14,22 +15,49 @@ class BaseSerializer(ModelSerializer):
     image = SerializerMethodField()
 
     def get_image(self, obj):
+        """Trả về URL ảnh trực tiếp từ CloudinaryField"""
         if hasattr(obj, 'image') and obj.image:
-            return obj.image.url
+            return str(obj.image)  # CloudinaryField lưu URL dưới dạng chuỗi
         return None
+
+    def compress_image(self, image_file):
+        """Nén ảnh và trả về dữ liệu bytes thay vì ContentFile"""
+        img = Image.open(image_file)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        output = io.BytesIO()
+        img.thumbnail((600, 600))  # Giảm kích thước để tối ưu
+        img.save(output, format='JPEG', quality=75)  # Giảm chất lượng
+        output.seek(0)
+        # Trả về bytes trực tiếp thay vì ContentFile để tránh lỗi tuần tự hóa
+        return output.getvalue()
 
     def create(self, validated_data):
         request = self.context.get('request')
+        print(f"Request in serializer: {request}")
+        print(f"Request FILES: {getattr(request, 'FILES', None) if request else None}")
+
         image_file = None
         if request and hasattr(request, 'FILES'):
             image_file = request.FILES.get('image')
+            print(f"Image file found: {image_file}")
 
         if image_file:
             try:
-                upload_result = upload(image_file)
-                validated_data['image'] = upload_result['url']
+                compressed_image = self.compress_image(image_file)
+                upload_result = upload(compressed_image, resource_type="image")
+                validated_data['image'] = upload_result['secure_url']
+                print(f"Image uploaded successfully: {upload_result['secure_url']}")
             except Exception as e:
+                print(f"Upload error: {str(e)}")
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
+
+        avatar_file = request.FILES.get('avatar')
+        if avatar_file:
+            compressed = self.compress_image(avatar_file)
+            upload_result = upload(compressed, resource_type="image")
+            validated_data['avatar'] = upload_result['secure_url']
+
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
@@ -40,26 +68,19 @@ class BaseSerializer(ModelSerializer):
 
         if image_file:
             try:
-                # Nén ảnh trước khi upload
                 compressed_image = self.compress_image(image_file)
-                start_time = time.time()
-                upload_result = upload(compressed_image)
-                end_time = time.time()
-                print(f"Cloudinary upload time: {end_time - start_time} seconds")
-                validated_data['image'] = upload_result['url']
+                upload_result = upload(compressed_image, resource_type="image")
+                validated_data['image'] = upload_result['secure_url']
             except Exception as e:
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
+        elif 'image' in validated_data and validated_data['image'] == '':
+            validated_data['image'] = None  # Xóa ảnh
+        elif 'image' not in validated_data:
+            validated_data['image'] = instance.image  # Giữ ảnh cũ
+
         return super().update(instance, validated_data)
 
-    def compress_image(image_file):
-        img = Image.open(image_file)
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        output = io.BytesIO()
-        img.thumbnail((800, 800))  # Giảm kích thước ảnh
-        img.save(output, format='JPEG', quality=85)  # Nén chất lượng
-        output.seek(0)
-        return ContentFile(output.read(), name=image_file.name)
+
 
 class UserSerializer(BaseSerializer):
     class Meta:
@@ -200,7 +221,6 @@ class FoodSerializers(BaseSerializer):
         }
 
     def to_internal_value(self, data):
-        # Sao chép data vì MultiValueDict không thể sửa
         data = data.copy()
         prices = []
         # Tìm các trường prices[i][field]
@@ -230,11 +250,15 @@ class FoodSerializers(BaseSerializer):
         return data
 
     def create(self, validated_data):
-        prices_data = validated_data.pop('prices', [])  # Mặc định là list rỗng nếu không có
-        food = Food.objects.create(**validated_data)
-        # Chỉ tạo prices nếu có dữ liệu
+        prices_data = validated_data.pop('prices', [])
+
+
+        food = super().create(validated_data)
+
+        # Tạo prices
         for price_data in prices_data:
             FoodPrice.objects.create(food=food, **price_data)
+
         return food
 
     def update(self, instance, validated_data):
@@ -297,7 +321,7 @@ class FoodReviewSerializers(BaseSerializer):
         return FoodReviewSerializers(replies, many=True).data
 
     def get_avatar(self, obj):
-        return obj.user.avatar.url if obj.user.avatar else None
+        return obj.user.avatar.url
 
 class RestaurantReviewSerializer(BaseSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
@@ -340,3 +364,29 @@ class CartSerializer(serializers.ModelSerializer):
     class Meta:
         model = Cart
         fields = ['id', 'user', 'item_number', 'total_price']
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = ['id', 'notification_type', 'title', 'message', 'is_read', 'created_at', 'related_object_id', 'related_object_type']
+        read_only_fields = ['created_at']
+
+# class MessageSerializer(serializers.ModelSerializer):
+#     sender = UserSerializer(read_only=True)
+#
+#     class Meta:
+#         model = Message
+#         fields = ['id', 'sender', 'content', 'created_date', 'is_read']
+#
+#
+# class ChatRoomSerializer(serializers.ModelSerializer):
+#     user1 = UserSerializer(read_only=True)
+#     user2 = UserSerializer(read_only=True)
+#     latest_message = serializers.SerializerMethodField()
+#
+#     class Meta:
+#         model = ChatRoom
+#         fields = ['id', 'user1', 'user2', 'last_message', 'last_message_time', 'is_active', 'latest_message']
+#
+#     def get_latest_message(self, obj):
+#         return obj.latest_message[0].content if obj.latest_message else None

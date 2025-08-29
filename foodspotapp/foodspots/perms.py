@@ -52,3 +52,8 @@ class IsOwnerOrAdmin(permissions.BasePermission):
 class IsOwner(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         return obj.user == request.user
+
+# class IsChatParticipant(permissions.BasePermission):
+#     def has_object_permission(self, request, view, obj):
+#         user = request.user
+#         return obj.user1 == user or obj.user2 == user

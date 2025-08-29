@@ -25,6 +25,7 @@ ORDER_STATUS_CHOICES = [
     ('ACCEPTED', 'Accepted'),
     ('DELIVERED', 'Delivered'),
     ('CANCEL', 'Cancel'),
+    ('FAIL', 'Fail'),
 ]
 
 PAYMENT_STATUS_CHOICES = [
@@ -188,6 +189,12 @@ class Payment(models.Model):
     total_payment = models.FloatField()
     created_date = models.DateField(auto_now_add=True)
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.status == 'FAIL':
+            self.order.status = 'FAIL'
+            self.order.save()
+
     def __str__(self):
         return f"Payment {self.id} for Order {self.order.id}"
 
@@ -245,6 +252,9 @@ class Menu(models.Model):
 
     def __str__(self):
         return f"{self.name} at {self.restaurant.name}"
+
+    class Meta:
+        ordering = ['-created_date']
 
 
 class RestaurantReview(models.Model):
@@ -355,3 +365,44 @@ class SubCartItem(models.Model):
         return f"SubCartItem {self.food.name} in SubCart {self.sub_cart.id}"
 
 
+# class ChatRoom(models.Model):
+#     user1 = models.ForeignKey(User, on_delete=models.CASCADE, related_name='chat_rooms_as_user1')
+#     user2 = models.ForeignKey(User, on_delete=models.CASCADE, related_name='chat_rooms_as_user2')
+#     last_message = models.TextField(null=True, blank=True)
+#     last_message_time = models.DateTimeField(null=True, blank=True)
+#     is_active = models.BooleanField(default=True)
+#
+#     def __str__(self):
+#         return f'Chat between {self.user1.username} and {self.user2.username}'
+#
+#
+# class Message(models.Model):
+#     chat_room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='messages')
+#     sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
+#     content = models.TextField()
+#     created_date = models.DateTimeField(auto_now_add=True)
+#     is_read = models.BooleanField(default=False)
+#
+#     def __str__(self):
+#         return f'Message from {self.sender.username} in {self.chat_room}'
+
+class Notification(models.Model):
+    NOTIFICATION_TYPES = (
+        ('new_menu', 'New Menu'),
+        ('new_food', 'New Food Item'),
+    )
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES)
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    related_object_id = models.PositiveIntegerField(null=True, blank=True)  # ID của menu hoặc food item
+    related_object_type = models.CharField(max_length=50, null=True, blank=True)  # Loại object liên quan
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.notification_type} - {self.user.username} - {self.created_at}"

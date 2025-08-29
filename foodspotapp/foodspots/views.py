@@ -2,7 +2,12 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.db import transaction, IntegrityError
 from django.db.models import Q, Prefetch, Sum, Count
-
+from django.db import models
+from django.core.mail import send_mail
+from django.conf import settings
+import cloudinary
+import cloudinary.uploader
+from threading import Thread
 from rest_framework import viewsets, generics, mixins, status, permissions
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -17,7 +22,7 @@ from .models import (
     Order, OrderDetail, Food, FoodCategory, FoodReview,
     RestaurantReview, Restaurant, FoodPrice, Follow,
     Favorite, Cart, SubCart, SubCartItem, Payment,
-    User, Address, Menu
+    User, Address, Menu, Notification
 )
 
 from .serializers import (
@@ -25,7 +30,8 @@ from .serializers import (
     FoodReviewSerializers, RestaurantReviewSerializer, FoodPriceSerializer,
     FollowSerializer, FavoriteSerializer, CartSerializer,
     SubCartSerializer, SubCartItemSerializer, UserSerializer,
-    RestaurantSerializer, RestaurantAddressSerializer, AddressSerializer, UserAddressSerializer, MenuSerializer
+    RestaurantSerializer, RestaurantAddressSerializer, AddressSerializer,
+    UserAddressSerializer, MenuSerializer, NotificationSerializer
 )
 
 from .perms import (
@@ -34,7 +40,7 @@ from .perms import (
 )
 
 from .paginators import (
-    FoodPagination, OrderPagination, ReviewPagination,
+    FoodPagination, OrderPagination, ReviewPagination, NotificationPagination
 )
 
 from datetime import datetime, date
@@ -42,6 +48,8 @@ from calendar import monthrange
 import re
 from django.contrib.admin.views.decorators import staff_member_required
 from django.shortcuts import render
+
+from .services import notify_new_food, notify_new_menu
 
 import logging
 logger = logging.getLogger(__name__)
@@ -232,132 +240,77 @@ class FoodPriceViewSet(viewsets.ModelViewSet):
         self.perform_update(serializer)
         return Response(serializer.data)
 
-class FoodViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIView):
+class FoodViewSet(viewsets.ModelViewSet):
+    queryset = Food.objects.all()
     serializer_class = FoodSerializers
-    pagination_class = FoodPagination
-
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'destroy']:
-            return [IsAuthenticated(), IsRestaurantOwner()]
-        return [AllowAny()]
-
+    permission_classes = [permissions.IsAuthenticated]
+    
     def get_queryset(self):
-        queryset = Food.objects.select_related(
-            'food_category',
-            'restaurant',
-            'restaurant__owner'
-        ).prefetch_related(
-            Prefetch('prices', queryset=FoodPrice.objects.all())
-        ).all().order_by('id')
-        return self._apply_filters(queryset)
-
-    def _apply_filters(self, queryset):
-        params = self.request.query_params
-        search = params.get('search')
-        if search:
-            queryset = queryset.filter(
-                Q(name__icontains=search) |
-                Q(restaurant__name__icontains=search)
-            )
-        food_category = params.get('food_category')
-        if food_category:
-            queryset = queryset.filter(food_category__name__icontains=food_category)
-        category_id = params.get('category_id')
-        if category_id:
-            try:
-                queryset = queryset.filter(food_category_id=int(category_id))
-            except (ValueError, TypeError):
-                logger.warning(f"Invalid category_id: {category_id}")
-        restaurant_id = params.get('restaurant_id')
+        queryset = Food.objects.all()
+        restaurant_id = self.request.query_params.get('restaurant_id')
         if restaurant_id:
-            try:
-                queryset = queryset.filter(restaurant_id=int(restaurant_id))
-            except (ValueError, TypeError):
-                logger.warning(f"Invalid restaurant_id: {restaurant_id}")
-        price_min = self.request.query_params.get('price_min')
-        price_max = self.request.query_params.get('price_max')
-
-        if price_min or price_max:
-            food_prices = FoodPrice.objects.all()
-            if price_min:
-                food_prices = food_prices.filter(price__gte=price_min)
-            if price_max:
-                food_prices = food_prices.filter(price__lte=price_max)
-            queryset = queryset.filter(id__in=food_prices.values('food_id')).distinct()
+            queryset = queryset.filter(restaurant_id=restaurant_id)
         return queryset
 
-    def create(self, request):
-        # Loại bỏ trường prices nếu có trong dữ liệu để tránh lỗi validation
-        data = request.data.copy()
-        if 'prices' in data:
-            data.pop('prices')
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [permissions.AllowAny()]
+        return [permissions.IsAuthenticated()]
 
-        serializer = self.get_serializer(data=data)
-        if not serializer.is_valid():
-            logger.error(f"Food validation failed: {serializer.errors}")
-            return Response({"error": "Dữ liệu không hợp lệ", "details": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
-
-        restaurant_id = serializer.validated_data['restaurant'].id
-        restaurant = get_object_or_404(Restaurant, id=restaurant_id)
+    def create(self, request, *args, **kwargs):
         try:
-            with transaction.atomic():
-                food = serializer.save()
-            logger.info(f"Created food: {food.id} - {food.name}")
-            return Response(self.get_serializer(food).data, status=status.HTTP_201_CREATED)
+            # Debug: In ra để kiểm tra
+            print(f"request.data: {request.data}")
+            print(f"request.FILES: {request.FILES}")
+
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+
+            food = serializer.save()
+
+            Thread(target=send_notification_async, args=(food,)).start()
+
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
         except Exception as e:
-            logger.error(f"Error creating food: {str(e)}")
+            print(f"Error creating food: {str(e)}")
             return Response(
-                {"error": "Lỗi khi tạo món ăn.", "detail": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
-    def update(self, request, pk=None):
-        food = get_object_or_404(Food, pk=pk)
-        serializer = self.get_serializer(food, data=request.data)
-        if not serializer.is_valid():
-            logger.error(f"Food validation errors: {serializer.errors}")
-            return Response({"error": "Dữ liệu không hợp lệ", "details": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+    def update(self, request, *args, **kwargs):
         try:
-            with transaction.atomic():
-                food = serializer.save()
-            logger.info(f"Updated food: {food.id} - {food.name}")
-            return Response(self.get_serializer(food).data)
-        except Exception as e:
-            logger.error(f"Error updating food {pk}: {str(e)}")
-            return Response(
-                {"error": "Lỗi cập nhật món ăn.", "detail": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            instance = self.get_object()
+            data = request.data
 
-    def partial_update(self, request, pk=None):
-        logger.info(f"Received PATCH request for food {pk} with data: {request.data}")
-        food = get_object_or_404(Food, pk=pk)
-        serializer = self.get_serializer(food, data=request.data, partial=True)
-        if not serializer.is_valid():
-            logger.error(f"Food validation errors: {serializer.errors}")
-            return Response({"error": "Dữ liệu không hợp lệ", "details": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
-        try:
-            with transaction.atomic():
-                food = serializer.save()
-            logger.info(f"Partially updated food: {food.id} - {food.name}")
-            serializer = self.get_serializer(food)  # Serialize lại để trả về
+            # Cập nhật dữ liệu
+            serializer = self.get_serializer(instance, data=data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            food = serializer.save()
+
+            # Gửi thông báo bất đồng bộ nếu có thay đổi
+            if any(field in data for field in ['name', 'price', 'description', 'image']):
+                Thread(target=send_notification_async, args=(food,)).start()
+
             return Response(serializer.data)
         except Exception as e:
-            logger.error(f"Error partially updating food {pk}: {str(e)}", exc_info=True)
+            print(f"Error updating food: {str(e)}")
             return Response(
-                {"error": "Lỗi cập nhật món ăn.", "detail": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
-    def destroy(self, request, pk=None):
-        food = get_object_or_404(Food, pk=pk)
-        food_name = food.name
-        food.delete()
-        logger.info(f"Deleted food: {pk} - {food_name}")
-        return Response(
-            {"message": "Món ăn đã được xóa thành công."},
-            status=status.HTTP_204_NO_CONTENT
-        )
+    def destroy(self, request, *args, **kwargs):
+        try:
+            instance = self.get_object()
+            self.perform_destroy(instance)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            print(f"Error deleting food: {str(e)}")
+            return Response(
+                {'error': str(e)}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
     @action(detail=True, methods=['get'])
     def reviews(self, request, pk=None):
@@ -1237,7 +1190,7 @@ class SubCartItemViewSet(viewsets.ViewSet):
         return Response({"error": "Danh sách ID rỗng!"}, status=status.HTTP_400_BAD_REQUEST)
 
 
-class MenuViewSet(viewsets.ViewSet):
+class MenuViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy', 'add_food_to_menu']:
             return [permissions.IsAuthenticated(), RestaurantOwner()]
@@ -1289,7 +1242,9 @@ class MenuViewSet(viewsets.ViewSet):
         if restaurant is None:
             logger.error("Restaurant is None in perform_create")
             raise ValueError("Restaurant cannot be None")
-        serializer.save(restaurant=restaurant)
+        menu = serializer.save(restaurant=restaurant)
+        # Gửi thông báo cho followers
+        notify_new_menu(menu)
 
     def update(self, request, pk=None):
         user = request.user
@@ -2014,3 +1969,201 @@ def statistics_view(request):
     return render(request, 'admin/statistics.html', {
         'user_count': user_count,
     })
+
+
+# class ChatViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView, generics.RetrieveAPIView):
+#     permission_classes = [IsChatParticipant]
+#     serializer_class = ChatRoomSerializer
+#     queryset = ChatRoom.objects.all()
+#     pagination_class = ChatRoomPagination
+#
+#     def get_queryset(self):
+#         user = self.request.user
+#         queryset = ChatRoom.objects.filter(
+#             models.Q(user1=user) | models.Q(user2=user)
+#         ).select_related('user1', 'user2').prefetch_related(
+#             Prefetch(
+#                 'messages',
+#                 queryset=Message.objects.order_by('-created_date')[:1],
+#                 to_attr='latest_message'
+#             )
+#         ).order_by('-last_message_time')
+#         q = self.request.query_params.get('q')
+#         if q:
+#             queryset = queryset.filter(
+#                 Q(user1=user, user2__first_name__icontains=q) |
+#                 Q(user1=user, user2__last_name__icontains=q) |
+#                 Q(user1=user, user2__username__icontains=q) |
+#                 Q(user2=user, user1__first_name__icontains=q) |
+#                 Q(user2=user, user1__last_name__icontains=q) |
+#                 Q(user2=user, user1__username__icontains=q)
+#             )
+#         return queryset
+#
+#
+#     def list(self, request, *args, **kwargs):
+#         queryset = self.get_queryset()
+#         page = self.paginate_queryset(queryset)
+#         if page is not None:
+#             serializer = self.get_serializer(page, many=True, context={'request': request})
+#             return self.get_paginated_response(serializer.data)
+#         serializer = self.get_serializer(queryset, many=True, context={'request': request})
+#         return Response(serializer.data)
+#
+#     def create(self, request, *args, **kwargs):
+#         user_id = request.data.get('user_id')
+#         if not user_id:
+#             return Response({'error': 'Vui lòng cung cấp ID của người dùng'}, status=status.HTTP_400_BAD_REQUEST)
+#         if request.user.id == int(user_id):
+#             return Response({'error': 'Không thể tạo phòng chat với chính mình.'}, status=status.HTTP_400_BAD_REQUEST)
+#
+#         other_user = get_object_or_404(User, id=user_id)
+#
+#         # Kiểm tra xem phòng chat đã tồn tại chưa
+#         existing_room = ChatRoom.objects.filter(
+#             models.Q(user1=request.user, user2=other_user) |
+#             models.Q(user1=other_user, user2=request.user)
+#         ).first()
+#         if existing_room:
+#             return Response(ChatRoomSerializer(existing_room, context={'request': request}).data)
+#
+#         chat_room = ChatRoom.objects.create(user1=request.user, user2=other_user)
+#         # Tạo phòng chat trong Firebase
+#         create_chat_room(chat_room.id, [request.user, other_user])
+#         return Response(ChatRoomSerializer(chat_room, context={'request': request}).data)
+#
+#     @action(detail=True, methods=['get'], url_path='messages')
+#     def get_messages(self, request, pk=None):
+#         """Phân trang tin nhắn từ DB, trả về từ mới nhất đến cũ nhất để FE append khi cuộn lên"""
+#         chat_room = get_object_or_404(
+#             ChatRoom.objects.filter(
+#                 models.Q(user1=request.user) | models.Q(user2=request.user)
+#             ),
+#             pk=pk
+#         )
+#         before_id = request.query_params.get('before_id')
+#         queryset = chat_room.messages.order_by('-created_date').select_related('sender')
+#         if before_id:
+#             try:
+#                 before_message = Message.objects.get(pk=before_id, chat_room=chat_room)
+#                 queryset = queryset.filter(created_date__lt=before_message.created_date)
+#             except Message.DoesNotExist:
+#                 return Response({'count': 0, 'next': None, 'previous': None, 'results': []}, status=200)
+#         # Sử dụng DRF Pagination
+#         paginator = MessagePagination()
+#         page = paginator.paginate_queryset(queryset, request)
+#         serializer = MessageSerializer(page, many=True)
+#         return paginator.get_paginated_response(serializer.data)
+#
+#     @action(detail=True, methods=['post'], url_path='send_message')
+#     def send_message(self, request, pk=None):
+#         chat_room = get_object_or_404(
+#             ChatRoom.objects.filter(
+#                 models.Q(user1=request.user) | models.Q(user2=request.user)
+#             ),
+#             pk=pk
+#         )
+#         content = request.data.get('content')
+#         if not content:
+#             return Response({'error': 'Vui lòng nhập nội dung tin nhắn'}, status=status.HTTP_400_BAD_REQUEST)
+#
+#         # Lưu vào DB để backup/thống kê trước để lấy id
+#         db_message = Message.objects.create(
+#             chat_room=chat_room,
+#             sender=request.user,
+#             content=content
+#         )
+#         user_ids = [chat_room.user1.id, chat_room.user2.id]
+#         # Gửi tin nhắn lên Firestore với id trùng DB
+#         send_message(pk, request.user.id, content, user_ids=user_ids, message_id=db_message.id)
+#         # Cập nhật last_message, last_message_time cho ChatRoom
+#         chat_room.last_message = content
+#         chat_room.last_message_time = db_message.created_date
+#         chat_room.save(update_fields=['last_message', 'last_message_time'])
+#
+#         return Response(MessageSerializer(db_message).data)
+#
+#     @action(detail=True, methods=['post'], url_path='mark_as_read')
+#     def mark_as_read(self, request, pk=None):
+#         """Đánh dấu tất cả tin nhắn chưa đọc là đã đọc cho user hiện tại (Firestore + DB)"""
+#         chat_room = get_object_or_404(
+#             ChatRoom.objects.filter(
+#                 models.Q(user1=request.user) | models.Q(user2=request.user)
+#             ),
+#             pk=pk
+#         )
+#         mark_messages_as_read(pk, request.user.id)
+#         Message.objects.filter(chat_room=chat_room, is_read=False).exclude(sender=request.user).update(is_read=True)
+#         # Đồng bộ trạng thái đã đọc lên lastMessages
+
+class NotificationViewSet(viewsets.ModelViewSet):
+    serializer_class = NotificationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = NotificationPagination
+
+    def get_queryset(self):
+        user = self.request.user
+        return Notification.objects.filter(user=user).order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        """
+        Lấy danh sách thông báo cho user hiện tại
+        """
+        try:
+            queryset = self.get_queryset()
+            serializer = self.get_serializer(queryset, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            print(f"Error getting notifications: {str(e)}")
+            return Response(
+                {'error': str(e)}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(detail=False, methods=['get'], url_path='unread-count')
+    def unread_count(self, request):
+        try:
+            count = self.get_queryset().filter(is_read=False).count()
+            return Response({'unread_count': count})
+        except Exception as e:
+            print(f"Error getting unread count: {str(e)}")
+            return Response(
+                {'error': str(e)}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(detail=False, methods=['post'], url_path='mark-all-read')
+    def mark_all_read(self, request):
+        try:
+            queryset = self.get_queryset().filter(is_read=False)
+            if queryset.exists():
+                queryset.update(is_read=True)
+                return Response({'status': 'success'})
+            return Response({'status': 'no unread notifications'})
+        except Exception as e:
+            print(f"Error marking all as read: {str(e)}")
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(detail=False, methods=['get'], url_path='unread-count')
+    def unread_count(self, request):
+        """
+        Lấy số lượng thông báo chưa đọc của người dùng hiện tại.
+        """
+        try:
+            count = self.get_queryset().filter(is_read=False).count()
+            return Response({'unread_count': count})
+        except Exception as e:
+            print(f"Error getting unread count: {str(e)}")
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+def send_notification_async(food):
+    try:
+        notify_new_food(food)
+    except Exception as e:
+        print(f"Error sending notification: {str(e)}")

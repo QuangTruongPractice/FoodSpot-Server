@@ -25,7 +25,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-qri44j=$2%je#5+k@_4z9y^&e9kgb^@5e(16u(bj@2nk_wecl@'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True  # Tạm thời bật debug để xem lỗi
 
 ALLOWED_HOSTS = ['tranquangtruong25.pythonanywhere.com', '127.0.0.1', 'localhost']
 
@@ -113,7 +113,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'foodspotdb',
         'USER': 'root',
-        'PASSWORD': 'Admin@123',
+        'PASSWORD': 'nghia142004',
         'HOST': ''
     }
 }
@@ -211,14 +211,18 @@ client_id = "k8KnkQk0NcvluzvlDBBeX64PRvgUDA9CUT8Av0PW"
 client_secrec = "PnpxNaNWxexgUpjKWRgAkeTdZVENwQFSpnaRxfjyjp8ayBrzPjykiwBzDEXQ3NM794Kcq62dFiYL0L0KWDdgwW8g7OQ7mEnrDzrDh3qJjANeoSaTujkEcrHaGQIV0f1i"
 
 
+# Email Configuration
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
+EMAIL_USE_SSL = False
 EMAIL_HOST_USER = 'nghianguyen.110616@gmail.com'
 EMAIL_HOST_PASSWORD = 'lvvz rbkb rqmw pnon'
 DEFAULT_FROM_EMAIL = 'nghianguyen.110616@gmail.com'
+EMAIL_TIMEOUT = 30  # Timeout in seconds
 
+# Logging Configuration
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -226,11 +230,21 @@ LOGGING = {
         'console': {
             'class': 'logging.StreamHandler',
         },
+        'file': {
+            'class': 'logging.FileHandler',
+            'filename': 'debug.log',
+        },
     },
     'loggers': {
-        '': {
-            'handlers': ['console'],
-            'level': 'INFO',
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'django.request': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': True,
         },
     },
 }
