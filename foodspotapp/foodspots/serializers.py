@@ -24,21 +24,16 @@ class BaseSerializer(ModelSerializer):
         if img.mode != 'RGB':
             img = img.convert('RGB')
         output = io.BytesIO()
-        img.thumbnail((600, 600))  # Giảm kích thước để tối ưu
-        img.save(output, format='JPEG', quality=75)  # Giảm chất lượng
+        img.thumbnail((600, 600))
+        img.save(output, format='JPEG', quality=75)
         output.seek(0)
-        # Trả về bytes trực tiếp thay vì ContentFile để tránh lỗi tuần tự hóa
         return output.getvalue()
 
     def create(self, validated_data):
         request = self.context.get('request')
-        print(f"Request in serializer: {request}")
-        print(f"Request FILES: {getattr(request, 'FILES', None) if request else None}")
-
         image_file = None
         if request and hasattr(request, 'FILES'):
             image_file = request.FILES.get('image')
-            print(f"Image file found: {image_file}")
 
         if image_file:
             try:
@@ -49,12 +44,6 @@ class BaseSerializer(ModelSerializer):
             except Exception as e:
                 print(f"Upload error: {str(e)}")
                 raise serializers.ValidationError(f"Upload ảnh thất bại: {str(e)}")
-
-        image_file = request.FILES.get('image')
-        if image_file:
-            compressed = self.compress_image(image_file)
-            upload_result = upload(compressed, resource_type="image")
-            validated_data['image'] = upload_result['secure_url']
 
         return super().create(validated_data)
 
@@ -89,6 +78,9 @@ class UserSerializer(BaseSerializer):
             'phone_number': {'required': False},
         }
 
+    def create(self, validated_data):
+        return super().create(validated_data)
+
     def validate_email(self, value):
         if not value:
             raise serializers.ValidationError("Email is required")
@@ -98,14 +90,6 @@ class UserSerializer(BaseSerializer):
         if not value:
             raise serializers.ValidationError("Username is required")
         return value
-
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        if instance.image:
-            data['image'] = instance.image.url
-        else:
-            data['image'] = None
-        return data
 
 class AddressSerializer(serializers.ModelSerializer):
     class Meta:
@@ -157,7 +141,7 @@ class RestaurantAddressSerializer(serializers.ModelSerializer):
         model = Restaurant
         fields = ['id', 'name', 'address']
 
-class MenuSerializer(BaseSerializer):
+class MenuSerializer(serializers.ModelSerializer):
     foods = serializers.SerializerMethodField()
     restaurant = serializers.SlugRelatedField(slug_field='name', read_only=True)
 
@@ -167,12 +151,10 @@ class MenuSerializer(BaseSerializer):
 
     def get_foods(self, obj):
         time_serve = obj.time_serve
-        # Lọc foods theo restaurant và time_serve
         queryset = obj.foods.filter(
             restaurant=obj.restaurant,
             prices__time_serve=time_serve
         ).distinct()
-
         serializer = FoodInMenuSerializer(queryset, many=True, context={'time_serve': time_serve})
         return serializer.data
 
@@ -239,7 +221,6 @@ class FoodSerializers(BaseSerializer):
         return super().to_internal_value(data)
 
     def validate(self, data):
-        # Chỉ validate prices nếu có dữ liệu prices được gửi lên
         prices = data.get('prices')
         if prices is not None and len(prices) == 0:
             raise serializers.ValidationError({"prices": "Nếu gửi prices thì phải có ít nhất 1 giá."})
@@ -255,11 +236,7 @@ class FoodSerializers(BaseSerializer):
 
     def update(self, instance, validated_data):
         prices_data = validated_data.pop('prices', None)
-
-        # Cập nhật các trường khác trước
         instance = super().update(instance, validated_data)
-
-        # Cập nhật prices nếu có
         if prices_data is not None:
             # Xóa tất cả prices cũ
             instance.prices.all().delete()

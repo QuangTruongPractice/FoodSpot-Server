@@ -1,11 +1,9 @@
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
-from django.db import transaction, IntegrityError, models
-from django.db.models import Q, Prefetch, Sum, Count
-from django.core.mail import send_mail
-from django.conf import settings
+from django.db import transaction, IntegrityError
+from django.db.models import Q, Prefetch
 
-from rest_framework import viewsets, generics, mixins, status, permissions
+from rest_framework import viewsets, generics, status, permissions
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
@@ -54,16 +52,13 @@ def index(request):
     return HttpResponse("foodspots")
 
 
-class OrderViewSet(viewsets.ViewSet):
+class OrderViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateAPIView, generics.RetrieveAPIView):
     pagination_class = OrderPagination
 
     def get_permissions(self):
         if self.action in ['current_restaurant_orders', 'current_restaurant_order_details']:
             return [IsAuthenticated(), IsRestaurantOwner()]
         return [IsAuthenticated(), IsOrderOwner()]
-
-    def get_object(self):
-        return get_object_or_404(Order, pk=self.kwargs.get('pk'))
 
     def get_queryset(self):
         user = self.request.user
@@ -73,43 +68,14 @@ class OrderViewSet(viewsets.ViewSet):
             return Order.objects.filter(user=user).order_by('-ordered_date', '-id')
         return Order.objects.none()
 
-    def list(self, request, *args, **kwargs):
-        orders = self.get_queryset()
-        # Áp dụng phân trang
-        paginator = self.pagination_class()
-        paginated_orders = paginator.paginate_queryset(orders, request)
-
-        serializer = OrderSerializer(paginated_orders, many=True)
-        return paginator.get_paginated_response(serializer.data)
-
     def retrieve(self, request, *args, **kwargs):
         order = self.get_object()
-
         class OrderDetailWithItemsSerializer(OrderSerializer):
             order_details = OrderDetailSerializer(many=True, read_only=True)
 
             class Meta(OrderSerializer.Meta):
                 fields = OrderSerializer.Meta.fields + ['order_details']
-
         return Response(OrderDetailWithItemsSerializer(order).data)
-
-    def create(self, request, *args, **kwargs):
-        order_serializer = OrderSerializer(data=request.data)
-        if order_serializer.is_valid():
-            order_serializer.save(user=request.user)
-            return Response(order_serializer.data, status=status.HTTP_201_CREATED)
-        return Response(order_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    def partial_update(self, request, *args, **kwargs):
-        order = self.get_object()
-        status = request.data.get('status')
-
-        if not status:
-            return Response({"error": "Chỉ được cập nhật trạng thái đơn hàng."}, status=status.HTTP_400_BAD_REQUEST)
-
-        order.status = status
-        order.save()
-        return Response(OrderSerializer(order).data)
 
     @action(methods=['post'], detail=False, url_path='checkout')
     def checkout(self, request):
@@ -213,26 +179,12 @@ class OrderDetailViewSet(viewsets.ViewSet, generics.ListAPIView, generics.Retrie
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-class FoodPriceViewSet(viewsets.ModelViewSet):
-    queryset = FoodPrice.objects.select_related('food')
-    serializer_class = FoodPriceSerializer
-
-    def partial_update(self, request, *args, **kwargs):
-        if set(request.data.keys()) != {"price"}:
-            raise ValidationError({"detail": "Chỉ được phép cập nhật trường 'price'."})
-
-        instance = self.get_object()
-        serializer = self.get_serializer(instance, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
-        return Response(serializer.data)
-
 class FoodViewSet(viewsets.ModelViewSet):
     serializer_class = FoodSerializers
     pagination_class = FoodPagination
 
     def get_permissions(self):
-        if self.action in ['list', 'retrieve']:
+        if self.action in ['list', 'retrieve', 'reviews']:
             return [AllowAny()]
         else:
             return [IsAuthenticated(), IsRestaurantOwner()]
@@ -241,7 +193,6 @@ class FoodViewSet(viewsets.ModelViewSet):
         queryset = Food.objects.select_related(
             'food_category',
             'restaurant',
-            'restaurant__owner'
         ).prefetch_related(
             Prefetch('prices', queryset=FoodPrice.objects.all())
         ).all().order_by('id')
@@ -562,7 +513,7 @@ class UserViewSet(viewsets.ViewSet):
     def get_current_user(self, request):
         user = request.user
         if request.method == 'PATCH':
-            serializer = UserSerializer(user, data=request.data, partial=True)
+            serializer = UserSerializer(user, data=request.data, partial=True, context={'request': request})
             if serializer.is_valid():
                 try:
                     serializer.save()
@@ -589,11 +540,15 @@ class UserViewSet(viewsets.ViewSet):
         validated_data['is_approved'] = (role != 'RESTAURANT_USER')
         print("validated_data trước khi tạo User:", validated_data)
 
-        validated_data.pop('password', None)
-        user = User(**validated_data)
-        user.set_password(password)
-        user.save()
-        return user, None
+        # Tạo một instance serializer mới với context request
+        serializer = UserSerializer(data=validated_data, context={'request': request})
+        if serializer.is_valid():
+            user = serializer.save()
+            user.set_password(password)
+            user.save()
+            return user, None
+        else:
+            return None, Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(methods=['post'], detail=False, url_path='register-customer')
     def register_customer(self, request):
@@ -1274,10 +1229,7 @@ class AddItemToCart(APIView):
         food = get_object_or_404(Food, id=food_id)
         restaurant = food.restaurant
 
-        # Lấy giá của thực phẩm cho thời gian phục vụ cụ thể
-
         cart, created = Cart.objects.get_or_create(user=user)
-
         sub_cart, created = SubCart.objects.get_or_create(cart=cart, restaurant=restaurant)
         # them hoac cap nhat
         sub_cart_item, created = SubCartItem.objects.get_or_create(
@@ -1346,7 +1298,7 @@ class MomoPayment(APIView):
             accessKey = "F8BBA842ECF85"
             secretKey = "K951B6PE1waDMi640xX08PD3vg6EkVlz"
             redirectUrl = 'foodspot://payment-result'
-            ipnUrl = "https://7082-2405-4802-9111-2a0-303e-3c97-d01f-3c5c.ngrok-free.app/momo-callback/"
+            ipnUrl = "https://f7d4-2405-4802-9052-4e90-53d-2101-e251-5ec3.ngrok-free.app/momo-callback/"
 
             # Tham số từ người dùng
             amount = str(request.data.get('amount'))
